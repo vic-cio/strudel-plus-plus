@@ -73,7 +73,7 @@ describe('openSession', () => {
     vi.clearAllMocks();
     handlers.clear();
     listeners.clear();
-    process.env.ELECTRON_RENDERER_URL = 'http://localhost:1/';
+    (process.env as Record<string, string>).ELECTRON_RENDERER_URL = 'http://localhost:1/';
     process.env.STRUDEL_BEATS_DIR = '/tmp/strudel-index-test-root';
     ptyStart.mockReset();
     ptyStart.mockReturnValue({ write: vi.fn(), resize: vi.fn(), kill: vi.fn() });
