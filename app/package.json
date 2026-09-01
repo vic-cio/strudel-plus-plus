@@ -9,6 +9,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "prepare:external": "node ../scripts/fetch-upstream-artifacts.mjs",
+    "postinstall": "node ../scripts/ensure-pty-helper.mjs",
     "dev": "npm run prepare:external && electron-vite dev",
     "build": "npm run prepare:external && electron-vite build && electron-builder --mac --dir && npm run verify:identity",
     "dist": "npm run prepare:external && electron-vite build && electron-builder --mac && npm run verify:identity",

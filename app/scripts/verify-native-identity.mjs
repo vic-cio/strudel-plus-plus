@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { basename, join, resolve } from 'node:path';
 
@@ -93,6 +93,25 @@ if (!existsSync(executablePath)) {
 }
 if (!existsSync(join(contentsPath, 'Resources', 'app.asar'))) {
   fail('packaged renderer is missing Resources/app.asar');
+}
+
+// node-pty 1.1.0 ships its macOS spawn helper without the executable bit, and
+// a helper that cannot be exec'd makes every harness start fail with a raw
+// "posix_spawnp failed." (see app/src/main/ptyHelper.ts).
+const prebuildsPath = join(contentsPath, 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds');
+const darwinHelpers = existsSync(prebuildsPath)
+  ? readdirSync(prebuildsPath)
+      .filter((name) => name.startsWith('darwin-'))
+      .map((name) => join(prebuildsPath, name, 'spawn-helper'))
+      .filter((helper) => existsSync(helper))
+  : [];
+if (darwinHelpers.length === 0) {
+  fail('packaged node-pty is missing prebuilds/darwin-*/spawn-helper');
+}
+for (const helper of darwinHelpers) {
+  if ((statSync(helper).mode & 0o111) === 0) {
+    fail(`packaged node-pty helper is not executable: ${helper}`);
+  }
 }
 
 console.log(`native identity ok: ${appPath}`);

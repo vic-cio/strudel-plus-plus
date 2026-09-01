@@ -78,24 +78,34 @@ export function createPtyHost(
       kill();
       const { command, args, cwd } = resolveHarness(id, config);
 
-      // Say so rather than spawning something that will exit 1 in silence.
-      if (!findOnPath(command, shellPath, exists)) {
-        handlers.onData(
-          `\r\n  ${command} is not on PATH.\r\n` +
-            `  Looked in: ${shellPath.split(':').filter(Boolean).join('\r\n             ')}\r\n` +
-            `  Edit harnesses.json to point at it, or pick another harness.\r\n`,
+      // Say so rather than spawning something that will fail or exit in
+      // silence. The resolved absolute path is also what gets spawned, so the
+      // start does not depend on how node-pty's helper resolves a bare name
+      // or on whatever PATH this process happened to inherit.
+      const resolved = findOnPath(command, shellPath, exists);
+      if (!resolved) {
+        throw new Error(
+          `Harness "${id}" could not start: command "${command}" is not on PATH ` +
+            `(searched: ${shellPath.split(':').filter(Boolean).join(' ')}). ` +
+            `Install "${command}", or edit harnesses.json to give an absolute path.`,
         );
-        handlers.onExit(127);
-        return undefined;
       }
 
-      const pty = spawnPty(command, args, {
-        name: 'xterm-256color',
-        cols: size.cols,
-        rows: size.rows,
-        cwd,
-        env: { ...process.env, PATH: shellPath, TERM: 'xterm-256color' } as Record<string, string>,
-      });
+      let pty: IPty;
+      try {
+        pty = spawnPty(resolved, args, {
+          name: 'xterm-256color',
+          cols: size.cols,
+          rows: size.rows,
+          cwd,
+          env: { ...process.env, PATH: shellPath, TERM: 'xterm-256color' } as Record<string, string>,
+        });
+      } catch (error) {
+        // A raw spawn error (for instance node-pty's "posix_spawnp failed.")
+        // says nothing about which harness died or what to do about it.
+        const cause = error instanceof Error ? error.message : String(error);
+        throw new Error(`Harness "${id}" failed to start (command "${command}"): ${cause}`);
+      }
       current = pty;
       currentId = id;
 

@@ -5,7 +5,8 @@ import { homedir } from 'node:os';
 import { extname, join, normalize, resolve } from 'node:path';
 import { BrowserWindow, app, ipcMain, shell } from 'electron';
 import { createBeatStore } from './beats';
-import { loginShellPath } from './env';
+import { augmentPath, loginShellPath } from './env';
+import { ensurePtyHelper } from './ptyHelper';
 import { createMidiOut, type MidiMessage } from './midi';
 import { createOscSender, type OscMessage } from './oscSender';
 import { createSessionStore, type SessionState } from './sessions';
@@ -103,7 +104,12 @@ async function main() {
   let store = createBeatStore(root);
   let watcher: FSWatcher | undefined;
   const config: HarnessConfig = { beatsRoot: root, harnesses: await loadHarnesses() };
-  const ptyHost = createPtyHost(await loginShellPath());
+  // node-pty's macOS helper ships without its executable bit; repair it before
+  // the first spawn tries to posix_spawn it and dies with posix_spawnp failed.
+  ensurePtyHelper();
+  // Finder-launched apps inherit no PATH to speak of, so discovery runs on the
+  // login shell's PATH widened with the usual install locations.
+  const ptyHost = createPtyHost(augmentPath(await loginShellPath()));
   const osc = createOscSender();
   const midi = createMidiOut();
   let session: ReturnType<typeof ptyHost.start> | undefined;
