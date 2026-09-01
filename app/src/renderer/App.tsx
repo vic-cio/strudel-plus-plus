@@ -8,6 +8,7 @@ import { StatusBar } from './components/StatusBar';
 import { TempoBox } from './components/TempoBox';
 import { desktop } from './desktop';
 import { APP_BUILT, readAudio, writeSnapshot } from './liveSnapshot';
+import { onRendererError } from './reportErrors';
 import { useStrudel } from './useStrudel';
 import { normalizeBeatName } from '../shared/beatName';
 import { DEFAULT_BEAT_SORT, moveBeat, sortBeats, type BeatSortMode, type BeatSummary } from '../shared/beatSorting';
@@ -15,6 +16,7 @@ import { nextCloneName } from '../shared/cloneName';
 import { handoffClonedBeat } from '../shared/cloneHandoff';
 import { resolveDiskChange } from '../shared/sync';
 import { clampCps, hasCodedTempo } from '../shared/tempo';
+import type { BeatChange } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
 
 /** Pane widths survive a restart. A layout you set once should stay set. */
@@ -78,7 +80,8 @@ export function App() {
     setBuffer(code);
   }, []);
 
-  const { containerRef, state, setCode, toggle, cps, changeCps, releaseCps, reevaluate } = useStrudel(onCodeChange);
+  const { containerRef, state, setCode, clearError, toggle, cps, changeCps, releaseCps, reevaluate } =
+    useStrudel(onCodeChange);
   const sessionRef = useRef<string>(undefined);
   sessionRef.current = session;
 
@@ -132,10 +135,14 @@ export function App() {
       setOpen(name);
       setCode(content);
       setConflict(undefined);
+      // The previous beat's parse failure says nothing about this one. A
+      // stale "[mini] parse error" that survives an adopt reads as if the
+      // new beat is broken too.
+      clearError();
       applyBeatTempo(name, content);
       persistBeat(name);
     },
-    [applyBeatTempo, persistBeat, setCode],
+    [applyBeatTempo, clearError, persistBeat, setCode],
   );
 
   /** Report what went wrong instead of dropping it on the floor. */
@@ -327,9 +334,19 @@ export function App() {
     setBuffer(content);
   }, []);
 
-  // Disk changes. The rule in shared/sync.ts decides; this only carries it out.
+  // Global renderer failures (an effect that threw, an IPC that rejected) are
+  // already logged to the main process; surfacing them here keeps a failure a
+  // person can act on from being invisible in a desktop shell.
   useEffect(() => {
-    return desktop.beats.onChange(async (change) => {
+    return onRendererError((message) => setBeatError(message));
+  }, []);
+
+  // Disk changes. The rule in shared/sync.ts decides; this only carries it out.
+  // The whole handler is guarded: a beat file an agent wrote can be anything,
+  // and a throw here would die as an unhandled rejection — invisible unless a
+  // terminal happens to be watching — instead of landing in the error surface.
+  const applyDiskChange = useCallback(
+    async (change: BeatChange) => {
       void refresh();
       if (change.name !== openRef.current || change.event === 'unlink') {
         return;
@@ -348,13 +365,35 @@ export function App() {
         savedRef.current = decision.content;
         bufferRef.current = decision.content;
         setBuffer(decision.content);
-        setCode(decision.content);
-        reevaluate();
+        // A pattern that fails to parse must surface in the status bar (the
+        // editor's own error state) and never take the app down; setCode and
+        // reevaluate are no more trusted than the pattern itself.
+        try {
+          setCode(decision.content);
+          // While playing the re-evaluation below refreshes the REPL's error
+          // state on its own; stopped, nothing ever would, so drop any stale
+          // accusation from the previous content here.
+          clearError();
+          reevaluate();
+        } catch (error) {
+          setBeatError(error instanceof Error ? error.message : String(error));
+        }
         return;
       }
       setConflict(decision.diskContent);
+    },
+    [clearError, reevaluate, refresh, setCode],
+  );
+
+  useEffect(() => {
+    return desktop.beats.onChange(async (change) => {
+      try {
+        await applyDiskChange(change);
+      } catch (error) {
+        setBeatError(error instanceof Error ? error.message : String(error));
+      }
     });
-  }, [refresh, setCode, reevaluate]);
+  }, [applyDiskChange]);
 
   const takeTheirs = useCallback(() => {
     if (conflict === undefined || !openRef.current) {
