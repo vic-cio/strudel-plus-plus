@@ -2,6 +2,7 @@ import { access, lstat, mkdir, readdir, readFile, symlink, writeFile } from 'nod
 import { join, resolve, sep } from 'node:path';
 import { BEAT_EXTENSION } from '../shared/beatName';
 import { isBeatSortMode, type BeatSortMode } from '../shared/beatSorting';
+import { seedHarnessContent } from './harnessContent';
 
 export type Session = { name: string; beats: number; usedAt: number };
 export type SessionState = {
@@ -108,6 +109,9 @@ export function createSessionStore(root: string): SessionStore {
   return {
     async list() {
       await mkdir(base, { recursive: true });
+      // The first thing the app asks the store for is this list, so it is
+      // also the moment a fresh root gets its default AGENTS.md and skills.
+      await seedHarnessContent(base);
       const entries = await readdir(base, { withFileTypes: true });
       const sessions = await Promise.all(
         entries

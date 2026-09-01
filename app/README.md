@@ -44,6 +44,13 @@ The app opens one session folder at a time. By default it uses
 ignored by Git. Each session contains beat `.js` files, an `AGENTS.md` context
 file, optional shared helper links, and `.session.json` state.
 
+A sessions root that lacks shared harness content is seeded when the app first
+lists its sessions: a default `AGENTS.md` describing the live-coding contract
+and a small skill set under `.claude/skills/` and `.agents/skills/`
+(`app/src/main/harnessContent.ts`). Seeding never overwrites: an `AGENTS.md`,
+`.claude`, or `.agents` the root already has is left exactly as it is, and
+sessions pick the shared content up as links when they are opened.
+
 The sidebar supports newest-first, name A–Z, and per-session manual ordering.
 Sorting and remembered per-beat tempo values live in `.session.json`.
 
