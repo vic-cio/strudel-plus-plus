@@ -224,15 +224,21 @@ async function main() {
   ipcMain.handle(CH.midiPorts, () => midi.ports());
 
   async function openSession(name: string) {
-    active = name;
     const folder = join(root, name);
-    store = createBeatStore(folder);
+    const previousBeatsRoot = config.beatsRoot;
     config.beatsRoot = folder;
+    let harness: string | undefined;
+    try {
+      harness = restartHarness();
+    } catch (error) {
+      config.beatsRoot = previousBeatsRoot;
+      throw error;
+    }
+    active = name;
+    store = createBeatStore(folder);
     await sessions.touch(name);
     await watcher?.close();
     watcher = watchBeats(folder, (change) => window.webContents.send(CH.beatsChanged, change));
-    // The harness has to move with the session, so restart it where it belongs.
-    const harness = restartHarness();
     return { name, folder, harness };
   }
 
