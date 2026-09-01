@@ -67,6 +67,6 @@ Keep changes within the wrapper boundary. Do not add upstream monorepo source,
 workspace links, or generated build output. Run `pnpm check` before proposing a
 change. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-The planned public repository is
-<https://github.com/vic-cio/strudel-plus-plus>. This candidate does not create
-or push to that remote.
+The repository lives at <https://github.com/vic-cio/strudel-plus-plus>; this
+source is what is published there. Propose changes with a normal pull request
+following [CONTRIBUTING.md](CONTRIBUTING.md).
