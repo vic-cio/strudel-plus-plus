@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -44,4 +46,37 @@ export async function loginShellPath(): Promise<string> {
   } catch {
     return process.env.PATH ?? '';
   }
+}
+
+/** Install locations a GUI process never inherits but CLIs actually land in. */
+export function wellKnownBinDirs(home: string): string[] {
+  return [
+    join(home, '.local/bin'),
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    join(home, 'bin'),
+  ];
+}
+
+/**
+ * Widen a resolved PATH with the well-known install locations.
+ *
+ * The login shell usually answers, but its profile can fail, hang, or simply
+ * not add these yet. Anything already present keeps its place; the well-known
+ * directories are appended rather than prepended so the user's own ordering
+ * still wins.
+ */
+export function augmentPath(path: string, extra: string[] = wellKnownBinDirs(homedir())): string {
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const dir of [...path.split(':'), ...extra]) {
+    if (!dir || seen.has(dir)) {
+      continue;
+    }
+    seen.add(dir);
+    kept.push(dir);
+  }
+  return kept.join(':');
 }

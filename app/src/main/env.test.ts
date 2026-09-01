@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { PATH_END, PATH_START, extractPath, pathScript } from './env';
+import { PATH_END, PATH_START, augmentPath, extractPath, pathScript, wellKnownBinDirs } from './env';
 
 const PATH = '/Users/vic/.local/bin:/opt/homebrew/bin:/usr/bin';
 
@@ -55,5 +55,46 @@ describe('pathScript', () => {
       env: { PATH: '/tmp/one' },
     });
     expect(extractPath(output)).toBe('/tmp/one');
+  });
+});
+
+describe('wellKnownBinDirs', () => {
+  it('lists the install locations a GUI process never inherits', () => {
+    expect(wellKnownBinDirs('/home/vic')).toEqual([
+      '/home/vic/.local/bin',
+      '/opt/homebrew/bin',
+      '/opt/homebrew/sbin',
+      '/usr/local/bin',
+      '/usr/local/sbin',
+      '/home/vic/bin',
+    ]);
+  });
+});
+
+describe('augmentPath', () => {
+  it('appends the well-known install locations', () => {
+    expect(augmentPath('/usr/bin:/bin', wellKnownBinDirs('/home/vic'))).toBe(
+      '/usr/bin:/bin:/home/vic/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/vic/bin',
+    );
+  });
+
+  it('keeps the first position of a directory that appears twice', () => {
+    // The login shell's ordering is the user's own; the well-known list only
+    // fills gaps in it.
+    expect(augmentPath('/opt/homebrew/bin:/usr/bin', ['/opt/homebrew/bin', '/usr/local/bin'])).toBe(
+      '/opt/homebrew/bin:/usr/bin:/usr/local/bin',
+    );
+  });
+
+  it('drops empty segments instead of passing them on', () => {
+    expect(augmentPath('::/usr/bin:', ['/bin'])).toBe('/usr/bin:/bin');
+  });
+
+  it('returns the well-known list for an empty path', () => {
+    // A Finder launch with a failed shell probe must still be able to find
+    // homebrew and ~/.local/bin installs.
+    expect(augmentPath('', wellKnownBinDirs('/home/vic'))).toBe(
+      '/home/vic/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/vic/bin',
+    );
   });
 });

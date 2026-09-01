@@ -50,7 +50,15 @@ Sorting and remembered per-beat tempo values live in `.session.json`.
 `harnesses.json` defines the coding helpers shown in the pane. Each helper runs
 in a fresh pty rooted at the selected session. The login-shell PATH is used so
 commands installed in `~/.local/bin` are available when Electron is launched
-from Finder. Every helper is prompted to read the session `AGENTS.md` first.
+from Finder, widened with the usual install locations; a command that still
+cannot be found fails the start with an error naming the harness. Every helper
+is prompted to read the session `AGENTS.md` first.
+
+node-pty 1.1.0 ships its macOS spawn helper without an executable bit, which
+makes every harness start fail with a raw `posix_spawnp failed.` The bit is
+repaired after install (`scripts/ensure-pty-helper.mjs`, run as the app's
+`postinstall`), again at app launch, and asserted for packaged bundles by
+`verify:identity`.
 
 When a helper writes the active beat, the watcher updates a clean editor buffer;
 if the buffer is dirty, the conflict bar lets you keep the local buffer or take

@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createPtyHost } from './pty';
 import type { HarnessConfig } from '../shared/harness';
@@ -137,5 +140,69 @@ describe('createPtyHost', () => {
     expect(exits).toEqual([]);
     second.die();
     expect(exits).toEqual([1]);
+  });
+});
+
+/**
+ * A real executable file on disk, so the default isExecutable check runs the
+ * way it does in the app: the regression here is about what gets spawned, and
+ * that needs a command the PATH search can actually find.
+ */
+function fakeBinary(): { directory: string; file: string } {
+  const directory = mkdtempSync(join(tmpdir(), 'strudel-pty-'));
+  const file = join(directory, 'claude');
+  writeFileSync(file, '#!/bin/sh\n');
+  chmodSync(file, 0o755);
+  return { directory, file };
+}
+
+describe('createPtyHost spawn resolution', () => {
+  it('spawns the absolute path it found, never the bare command', () => {
+    // A GUI-launched app has a bare PATH, and node-pty's helper resolves the
+    // program against the parent environment. Spawning the name the login
+    // shell resolved makes the start independent of the launch context.
+    const { directory, file } = fakeBinary();
+    const spawnPty = vi.fn(() => fakePty().pty);
+    const host = createPtyHost(directory, spawnPty as never);
+    host.start('claude', size, config, handlers);
+    expect(spawnPty).toHaveBeenCalledWith(
+      file,
+      [],
+      expect.objectContaining({ cwd: '/beats', env: expect.objectContaining({ PATH: directory }) }),
+    );
+  });
+
+  it('fails a start whose command is not on PATH with a harness-named error', () => {
+    // The raw failure modes here are a silent exit 1 or, worse, node-pty's
+    // "posix_spawnp failed." with no hint which harness or command it was.
+    const host = createPtyHost(
+      '/usr/bin',
+      () => fakePty().pty as never,
+      () => false,
+    );
+    expect(() => host.start('claude', size, config, handlers)).toThrow(
+      /Harness "claude" could not start: command "claude" is not on PATH/,
+    );
+  });
+
+  it('does not spawn or report an exit when the command is not on PATH', () => {
+    const spawnPty = vi.fn(() => fakePty().pty);
+    const onExit = vi.fn();
+    const host = createPtyHost('/usr/bin', spawnPty as never, () => false);
+    expect(() => host.start('claude', size, config, { onData: () => {}, onExit })).toThrow();
+    expect(spawnPty).not.toHaveBeenCalled();
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it('names the harness when the spawn itself fails', () => {
+    // node-pty throws "posix_spawnp failed." from deep inside its helper; that
+    // reached the UI raw and named neither the harness nor the command.
+    const spawnPty = vi.fn(() => {
+      throw new Error('posix_spawnp failed.');
+    });
+    const host = createPtyHost('/usr/bin', spawnPty as never, () => true);
+    expect(() => host.start('claude', size, config, handlers)).toThrow(
+      /Harness "claude" failed to start \(command "claude"\): posix_spawnp failed\./,
+    );
   });
 });

@@ -77,6 +77,15 @@ export function HarnessPane({ harnesses, active, onPick, beat }: Props) {
 
   const focus = useCallback(() => term.current?.focus(), []);
 
+  /** A failed start has to land in the pane: a swallowed rejection reads as an
+   * empty terminal with no explanation, and the picker error surface is not
+   * even mounted for the first, automatic start. */
+  const showStartFailure = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    started.current = false;
+    term.current?.writeln(`\r\n${DIM}[harness] ${message}${RESET}`);
+  }, []);
+
   useEffect(() => {
     if (!mount.current || term.current) {
       return;
@@ -138,7 +147,7 @@ export function HarnessPane({ harnesses, active, onPick, beat }: Props) {
       terminal.refresh(0, terminal.rows - 1);
       opened.current = true;
       started.current = true;
-      void desktop.harness.start(activeRef.current, terminal.cols, terminal.rows);
+      desktop.harness.start(activeRef.current, terminal.cols, terminal.rows).catch(showStartFailure);
       terminal.focus();
     });
 
@@ -165,9 +174,11 @@ export function HarnessPane({ harnesses, active, onPick, beat }: Props) {
     started.current = true;
     terminal.reset();
     fit.current?.fit();
-    void desktop.harness.start(active, terminal.cols, terminal.rows);
+    desktop.harness.start(active, terminal.cols, terminal.rows).catch(showStartFailure);
     terminal.focus();
-  }, [active]);
+    // showStartFailure is a stable callback; the effect re-runs only on a
+    // harness switch.
+  }, [active, showStartFailure]);
 
   return (
     <section className="pane">
