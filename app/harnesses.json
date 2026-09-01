@@ -1,0 +1,38 @@
+{
+  "harnesses": [
+    {
+      "id": "claude",
+      "label": "claude",
+      "command": "claude",
+      "args": [
+        "--append-system-prompt",
+        "Before anything else, read AGENTS.md in the working directory. It explains that you are running inside a Strudel desktop app beside a live editor, and how to reach the code."
+      ]
+    },
+    {
+      "id": "pi",
+      "label": "pi",
+      "command": "pi",
+      "args": [
+        "--append-system-prompt",
+        "Before handling the first request, read AGENTS.md in the working directory. It explains the live Strudel editor, the current session boundary, the .strudel-live.json snapshot, and how to edit beat files. Read ../../app/README.md only when you need desktop implementation detail. Treat this as a fresh helper session for the current beat and use the environment, docs, and available skills rather than asking the captain to restate them."
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "codex",
+      "command": "codex",
+      "args": [
+        "--disable",
+        "hooks",
+        "Read AGENTS.md in the working directory before anything else. It explains the live Strudel editor, the current session boundary, the .strudel-live.json snapshot, and how to edit beat files. Read ../../app/README.md only when you need desktop implementation detail. Treat this as a fresh helper session for the current beat and use the environment, docs, and available skills rather than asking the captain to restate them."
+      ]
+    },
+    {
+      "id": "shell",
+      "label": "shell",
+      "command": "zsh",
+      "args": ["-l"]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "strudel-plus-plus-wrapper",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.12.2",
+  "description": "An independent personal macOS Electron desktop wrapper for Strudel",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vic-cio/strudel-plus-plus.git"
+  },
+  "scripts": {
+    "setup": "pnpm install",
+    "dev": "pnpm --dir app dev",
+    "build": "pnpm --dir app build",
+    "dist": "pnpm --dir app dist",
+    "test": "pnpm --dir app test",
+    "typecheck": "pnpm --dir app typecheck",
+    "lint": "eslint app --quiet",
+    "format-check": "prettier --check app scripts *.md *.json *.yaml .github/workflows/ci.yml",
+    "check": "pnpm format-check && pnpm lint && pnpm test && pnpm typecheck && pnpm verify:boundary",
+    "verify:boundary": "node scripts/verify-wrapper-boundary.mjs",
+    "prepare:external": "node scripts/fetch-upstream-artifacts.mjs"
+  },
+  "author": "Victor Ciobanu",
+  "license": "AGPL-3.0-or-later",
+  "devDependencies": {
+    "@eslint/compat": "1.2.5",
+    "@eslint/eslintrc": "3.2.0",
+    "@eslint/js": "9.19.0",
+    "eslint": "9.19.0",
+    "eslint-plugin-import": "2.31.0",
+    "globals": "15.14.0",
+    "prettier": "3.4.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "name": "strudel-plus-plus-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "An independent personal macOS Electron desktop wrapper for Strudel",
+  "author": "Victor Ciobanu",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "prepare:external": "node ../scripts/fetch-upstream-artifacts.mjs",
+    "dev": "npm run prepare:external && electron-vite dev",
+    "build": "npm run prepare:external && electron-vite build && electron-builder --mac --dir && npm run verify:identity",
+    "dist": "npm run prepare:external && electron-vite build && electron-builder --mac && npm run verify:identity",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "verify:identity": "node scripts/verify-native-identity.mjs"
+  },
+  "dependencies": {
+    "@julusian/midi": "3.8.1",
+    "@strudel/codemirror": "1.3.0",
+    "@strudel/core": "1.2.6",
+    "@strudel/draw": "1.2.6",
+    "@strudel/hydra": "1.2.6",
+    "@strudel/midi": "1.3.0",
+    "@strudel/mini": "1.2.6",
+    "@strudel/mondo": "1.1.6",
+    "@strudel/motion": "1.2.6",
+    "@strudel/osc": "1.3.2",
+    "@strudel/soundfonts": "1.3.0",
+    "@strudel/tonal": "1.2.6",
+    "@strudel/transpiler": "1.2.6",
+    "@strudel/webaudio": "1.3.0",
+    "@strudel/xen": "1.2.6",
+    "dough-synth": "0.2.4",
+    "hs2js": "0.1.0",
+    "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "4.2.0",
+    "@lezer/highlight": "1.2.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.6",
+    "@types/react": "19.0.8",
+    "@types/react-dom": "19.0.3",
+    "@vitejs/plugin-react": "4.3.4",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "chokidar": "4.0.3",
+    "electron": "34.5.8",
+    "electron-builder": "25.1.8",
+    "electron-vite": "3.1.0",
+    "jsdom": "30.0.1",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "typescript": "5.7.3",
+    "vite-plugin-bundle-audioworklet": "0.1.2",
+    "vitest": "3.0.4",
+    "worker-timers": "8.0.13"
+  },
+  "build": {
+    "appId": "com.victor.strudel-desktop",
+    "productName": "strudel++",
+    "npmRebuild": false,
+    "icon": "build/icon.png",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "harnesses.json",
+      "!**/node_modules/jazz-midi/bin/**/{linux,win}*/**"
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "target": "dir",
+      "executableName": "strudel++",
+      "extendInfo": {
+        "CFBundleDisplayName": "strudel++",
+        "CFBundleName": "strudel++"
+      },
+      "identity": null
+    },
+    "asarUnpack": [
+      "**/node_modules/node-pty/**",
+      "**/node_modules/@julusian/midi/**"
+    ]
+  }
+}

@@ -1,0 +1,586 @@
+/*
+  Deadeye: dark sepia ground, cream hairlines, no radius, no shadow.
+
+  The palette is sampled from the reference config rather than guessed. The
+  panel body, the title strip and the raised rows are three browns within a few
+  points of each other, and every line and every glyph is the same cream. That
+  narrowness is the look. Contrast lives between the cream and the brown, never
+  between one brown and another.
+*/
+:root {
+  --ground: #3a251d;
+  --ground-sunk: #2f1d16;
+  --ground-raised: #5a3b28;
+  --ground-input: #4a2f20;
+
+  --ink: #efe7d3;
+  --ink-soft: #cdb894;
+  --ink-faint: #9c8462;
+
+  --line: #6b4a33;
+  --line-strong: #a3805c;
+
+  --rust: #e2643c;
+  --gold: #e0a83c;
+  --olive: #adb56d;
+
+  --mono: 'Berkeley Mono', 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+
+  /*
+    The 45-degree hatch from the reference, at a fraction of its alpha. At the
+    config's 0.25 it fights the text; this is enough to keep the surface from
+    reading as flat paint. Set --texture to 0 to switch it off.
+  */
+  --texture: 0.028;
+  --hatch: repeating-linear-gradient(
+    45deg,
+    rgba(255, 232, 194, var(--texture)) 0px,
+    rgba(255, 232, 194, var(--texture)) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+}
+
+/* The parchment scheme, kept as an alternative. */
+:root[data-theme='parchment'] {
+  --ground: #f4efe4;
+  --ground-sunk: #e7dfcd;
+  --ground-raised: #fbf8f1;
+  --ground-input: #ede5d5;
+  --ink: #241f1a;
+  --ink-soft: #5b4f41;
+  --ink-faint: #8a7c68;
+  --line: #c4b79f;
+  --line-strong: #8f7f66;
+  --rust: #a8432a;
+  --gold: #8a6a12;
+  --olive: #56603a;
+  --texture: 0.02;
+}
+
+* {
+  box-sizing: border-box;
+  border-radius: 0 !important;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: var(--ink-soft);
+  background: none;
+  border: 1px solid transparent;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--ground-raised);
+}
+button:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+.tempo {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  -webkit-app-region: no-drag;
+}
+.tempo-coded {
+  opacity: 0.42;
+  transition: opacity 120ms ease;
+}
+.tempo-box {
+  width: 4.5em;
+  font: inherit;
+  text-align: right;
+  color: var(--ink);
+  background: var(--ground-input);
+  border: 1px solid var(--line);
+  padding: 0 3px;
+  outline: none;
+}
+.tempo-box:focus {
+  border-color: var(--gold);
+}
+.tempo-unit {
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 14px;
+  background: var(--ground);
+  background-image: var(--hatch);
+}
+
+/* The window has no title bar here, so the picker owns the drag strip. */
+.picker-drag {
+  -webkit-app-region: drag;
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 34px;
+}
+
+.picker-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 76vw);
+  height: min(420px, 62vh);
+  border: 1px solid var(--line-strong);
+  background: var(--ground);
+}
+.picker-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: none;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ground-sunk);
+  background-image: var(--hatch);
+}
+.picker-mark {
+  font-size: 15px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.picker-sub {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.picker-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.picker-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 12px;
+  text-align: left;
+  border: none;
+  color: var(--ink-soft);
+}
+.picker-item[aria-current='true'] {
+  background: var(--ground-raised);
+  color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--gold);
+  border: none;
+}
+.picker-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-meta,
+.picker-hint,
+.picker-root {
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+.picker-meta {
+  white-space: nowrap;
+}
+.picker-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--ground-sunk);
+}
+.picker-hint {
+  flex: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+.picker-root {
+  margin: 0;
+  max-width: min(680px, 76vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Layout ------------------------------------------------------------------ */
+
+.app {
+  display: grid;
+  grid-template-rows: 34px 1fr 22px;
+  height: 100%;
+  background: var(--ground);
+}
+
+.titlebar {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-left: 84px; /* clears the traffic lights */
+  border-bottom: 1px solid var(--line);
+  background: var(--ground-sunk);
+  background-image: var(--hatch);
+}
+.titlebar .transport {
+  -webkit-app-region: no-drag;
+  display: flex;
+  gap: 2px;
+}
+.titlebar .transport.right {
+  margin-left: auto;
+  padding-right: 8px;
+}
+.titlebar .beat {
+  color: var(--ink-soft);
+  letter-spacing: 0.04em;
+}
+.titlebar .beat b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.panes {
+  display: grid;
+  /* The beats grip collapses with the pane it resizes. */
+  grid-template-columns: var(--tree-w) var(--grip-w, 5px) 1fr var(--term-grip-w, 5px) var(--term-w);
+  min-height: 0;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ground);
+}
+
+.collapse {
+  -webkit-app-region: no-drag;
+  color: var(--ink-faint);
+  padding: 1px 4px;
+}
+
+/* Drag to resize ---------------------------------------------------------- */
+
+.grip {
+  cursor: col-resize;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  background: var(--ground-sunk);
+  background-image: var(--hatch);
+}
+.grip:hover,
+.grip[data-dragging='true'] {
+  background-color: var(--ground-raised);
+  border-color: var(--line-strong);
+}
+/* While a grip is held, the pointer must not select text or enter the iframe. */
+body[data-resizing='true'] {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.pane-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 26px;
+  flex: none;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ground-sunk);
+  background-image: var(--hatch);
+  color: var(--ink-soft);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+/* The bracketed label never wraps or shrinks; whatever sits beside it gives way
+   and ellipsises. A long beat name used to push "[ harness ]" onto two lines. */
+.pane-title > :first-child {
+  flex: none;
+  white-space: nowrap;
+}
+.pane-title > :last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-title .beat-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* File tree --------------------------------------------------------------- */
+
+.tree-row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.tree-row[draggable='true'] {
+  cursor: grab;
+}
+.tree-row[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 8px;
+  text-align: left;
+  border: none;
+  color: var(--ink-soft);
+}
+.tree-item:hover {
+  background: var(--ground-raised);
+  border: none;
+  color: var(--ink);
+}
+.tree-item[aria-current='true'] {
+  background: var(--ground-raised);
+  color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--gold);
+}
+.tree-item .dot {
+  color: var(--rust);
+  visibility: hidden;
+}
+.tree-item[data-dirty='true'] .dot {
+  visibility: visible;
+}
+
+.tree-empty,
+.tree-error,
+.tree-confirm {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.tree-empty {
+  color: var(--ink-faint);
+}
+.tree-error {
+  color: var(--rust);
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+.tree-confirm {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-soft);
+  background: var(--ground-raised);
+  box-shadow: inset 2px 0 0 var(--rust);
+}
+.tree-confirm span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-drag-handle {
+  flex: 0 0 1em;
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1;
+}
+.tree-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+}
+.tree-sort select {
+  max-width: 102px;
+  font: inherit;
+  color: var(--ink-soft);
+  background: var(--ground-input);
+  border: 1px solid var(--line);
+  padding: 1px 2px;
+  outline: none;
+  letter-spacing: normal;
+}
+.tree-sort select:focus {
+  border-color: var(--gold);
+}
+
+/* The naming row has to line up with the rows around it, so it borrows their
+   padding and sits on the sunk ground rather than looking like a form field. */
+.tree-input {
+  width: 100%;
+  font: inherit;
+  color: var(--ink);
+  background: var(--ground-input);
+  border: 1px solid var(--gold);
+  padding: 1px 4px;
+  outline: none;
+}
+.tree-input::placeholder {
+  color: var(--ink-faint);
+}
+
+/* Editor ------------------------------------------------------------------ */
+
+.editor {
+  height: 100%;
+}
+.editor .cm-editor {
+  height: 100%;
+  background: var(--ground);
+}
+.editor .cm-scroller {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.editor .cm-gutters {
+  background: var(--ground);
+  border-right: 1px solid var(--line);
+  color: var(--ink-faint);
+}
+.editor .cm-activeLine,
+.editor .cm-activeLineGutter {
+  background: var(--ground-sunk);
+}
+.editor .cm-cursor {
+  border-left-color: var(--gold);
+  border-left-width: 2px;
+}
+
+/* The conflict bar -------------------------------------------------------- */
+
+.conflict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--ground-raised);
+  box-shadow: inset 3px 0 0 var(--gold);
+}
+.conflict span {
+  flex: 1;
+  color: var(--ink-soft);
+}
+.conflict b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* Harness ----------------------------------------------------------------- */
+
+.harness-pick {
+  -webkit-app-region: no-drag;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--ground-input);
+  border: 1px solid var(--line-strong);
+  padding: 0 4px;
+}
+
+/*
+  The terminal wrapper carries the padding and the fit addon measures the inner
+  element, so the reported column count matches what is actually visible. With
+  the padding on the measured element the terminal runs a character wider than
+  the pane and clips its right edge.
+*/
+.term-pad {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 2px 2px 6px;
+  background: var(--ground);
+  overflow: hidden;
+}
+.term-pad .term {
+  height: 100%;
+  width: 100%;
+}
+.term-pad .xterm-viewport {
+  background: transparent !important;
+}
+
+/* Status bar -------------------------------------------------------------- */
+
+.status {
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  background: var(--ground-sunk);
+  background-image: var(--hatch);
+  color: var(--ink-soft);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.status .slot {
+  padding: 0 10px;
+  border-right: 1px solid var(--line);
+  white-space: nowrap;
+}
+.status .slot:last-child {
+  border-right: none;
+  margin-left: auto;
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status .on {
+  color: var(--olive);
+}
+.status .off {
+  color: var(--ink-faint);
+}
+.status .warn {
+  color: var(--rust);
+}

@@ -1,0 +1,18 @@
+packages:
+  - app/
+
+# Native modules are rebuilt by electron-builder for the Electron ABI. Keeping
+# this check off lets the wrapper's build script own that step explicitly.
+verifyDepsBeforeRun: false
+
+onlyBuiltDependencies:
+  - '@julusian/midi'
+  - electron
+  - esbuild
+  - node-pty
+
+allowBuilds:
+  '@julusian/midi': true
+  electron: true
+  esbuild: true
+  node-pty: true

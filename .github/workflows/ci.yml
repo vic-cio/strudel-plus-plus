@@ -1,0 +1,35 @@
+name: Desktop CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  desktop:
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify wrapper boundary
+        run: pnpm verify:boundary
+      - name: Check formatting
+        run: pnpm format-check
+      - name: Lint
+        run: pnpm lint
+      - name: Test desktop app
+        run: pnpm test
+      - name: Typecheck desktop app
+        run: pnpm typecheck
+      - name: Build and verify macOS app
+        run: pnpm build

@@ -1,0 +1,526 @@
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { ConflictBar } from './components/ConflictBar';
+import { FileTree } from './components/FileTree';
+import { Grip } from './components/Grip';
+import { HarnessPane } from './components/HarnessPane';
+import { SessionPicker, type SessionSummary } from './components/SessionPicker';
+import { StatusBar } from './components/StatusBar';
+import { TempoBox } from './components/TempoBox';
+import { desktop } from './desktop';
+import { APP_BUILT, readAudio, writeSnapshot } from './liveSnapshot';
+import { useStrudel } from './useStrudel';
+import { normalizeBeatName } from '../shared/beatName';
+import { DEFAULT_BEAT_SORT, moveBeat, sortBeats, type BeatSortMode, type BeatSummary } from '../shared/beatSorting';
+import { nextCloneName } from '../shared/cloneName';
+import { handoffClonedBeat } from '../shared/cloneHandoff';
+import { resolveDiskChange } from '../shared/sync';
+import { clampCps, hasCodedTempo } from '../shared/tempo';
+import type { HarnessDef } from '../shared/harness';
+
+/** Pane widths survive a restart. A layout you set once should stay set. */
+function usePaneWidth(key: string, fallback: number) {
+  const [width, setWidth] = useState(() => {
+    try {
+      return Number(localStorage.getItem(key)) || fallback;
+    } catch {
+      return fallback;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, String(width));
+    } catch {
+      // A private window or blocked site data. The layout just will not persist.
+    }
+  }, [key, width]);
+  return [width, setWidth] as const;
+}
+
+const STARTER = `// a new beat\nsetcps(0.5)\n\nstack(\n  s("bd*2, ~ sd"),\n  s("hh*8").gain(0.4),\n)\n`;
+
+function sameOrder(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+export function App() {
+  const [root, setRoot] = useState('');
+  const [beats, setBeats] = useState<BeatSummary[]>([]);
+  const [beatSort, setBeatSort] = useState<BeatSortMode>(DEFAULT_BEAT_SORT);
+  const [manualBeatOrder, setManualBeatOrder] = useState<string[]>([]);
+  const [open, setOpen] = useState<string>();
+  const [harnesses, setHarnesses] = useState<HarnessDef[]>([]);
+  const [harness, setHarness] = useState('shell');
+  const [conflict, setConflict] = useState<string>();
+  const [beatError, setBeatError] = useState<string>();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [session, setSession] = useState<string>();
+  const [picking, setPicking] = useState(true);
+  const [buffer, setBuffer] = useState('');
+  const [treeWidth, setTreeWidth] = usePaneWidth('pane.tree', 210);
+  const [termWidth, setTermWidth] = usePaneWidth('pane.term', 460);
+  const [treeOpen, setTreeOpen] = usePaneWidth('pane.treeOpen', 1);
+  const [termOpen, setTermOpen] = usePaneWidth('pane.termOpen', 1);
+  const [cpsByBeat, setCpsByBeat] = useState<Record<string, number>>({});
+
+  // The last content this app wrote to disk. Everything the sync rule decides
+  // hangs off it, so it is a ref: it must be current inside the watcher
+  // callback, not one render behind.
+  const savedRef = useRef('');
+  const bufferRef = useRef('');
+  const openRef = useRef<string>(undefined);
+  const beatsRef = useRef<BeatSummary[]>([]);
+  const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
+  const manualBeatOrderRef = useRef<string[]>([]);
+  const sessionStateHydratedRef = useRef(false);
+  openRef.current = open;
+
+  const onCodeChange = useCallback((code: string) => {
+    bufferRef.current = code;
+    setBuffer(code);
+  }, []);
+
+  const { containerRef, state, setCode, toggle, cps, changeCps, releaseCps, reevaluate } = useStrudel(onCodeChange);
+  const sessionRef = useRef<string>(undefined);
+  sessionRef.current = session;
+  const cpsRef = useRef(cps);
+  cpsRef.current = cps;
+  const cpsByBeatRef = useRef(cpsByBeat);
+  cpsByBeatRef.current = cpsByBeat;
+  const dirty = Boolean(open) && buffer !== savedRef.current;
+  const codedTempo = hasCodedTempo(buffer);
+
+  const applyBeatTempo = useCallback(
+    (name: string, content: string) => {
+      if (hasCodedTempo(content)) {
+        releaseCps();
+        return;
+      }
+      const remembered = cpsByBeatRef.current[name] ?? cpsRef.current;
+      if (cpsByBeatRef.current[name] === undefined) {
+        const next = { ...cpsByBeatRef.current, [name]: remembered };
+        cpsByBeatRef.current = next;
+        setCpsByBeat(next);
+      }
+      changeCps(remembered);
+    },
+    [changeCps, releaseCps],
+  );
+
+  const adopt = useCallback(
+    (name: string, content: string) => {
+      savedRef.current = content;
+      bufferRef.current = content;
+      setBuffer(content);
+      setOpen(name);
+      setCode(content);
+      setConflict(undefined);
+      applyBeatTempo(name, content);
+    },
+    [applyBeatTempo, setCode],
+  );
+
+  /** Report what went wrong instead of dropping it on the floor. */
+  const attempt = useCallback(async (action: () => Promise<void>) => {
+    try {
+      setBeatError(undefined);
+      await action();
+    } catch (error) {
+      setBeatError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const list = await desktop.beats.listInfo();
+    beatsRef.current = list;
+    setBeats(list);
+    if (beatSortRef.current === 'manual') {
+      const completeOrder = sortBeats(list, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
+      if (!sameOrder(completeOrder, manualBeatOrderRef.current)) {
+        manualBeatOrderRef.current = completeOrder;
+        setManualBeatOrder(completeOrder);
+      }
+    }
+    return list;
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      setRoot(await desktop.sessions.root());
+      setSessions(await desktop.sessions.list());
+      const available = await desktop.harness.list();
+      setHarnesses(available);
+      setHarness(available[0]?.id ?? 'shell');
+    })();
+  }, []);
+
+  /** Open a session: point the app at its folder and restore where it was left. */
+  const openSession = useCallback(
+    (name: string, make = false) =>
+      attempt(async () => {
+        await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
+        const saved = await desktop.sessions.state(name);
+        const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
+        const restoredManualOrder = saved.manualBeatOrder ?? [];
+        sessionStateHydratedRef.current = false;
+        beatSortRef.current = restoredSort;
+        manualBeatOrderRef.current = restoredManualOrder;
+        setBeatSort(restoredSort);
+        setManualBeatOrder(restoredManualOrder);
+        const list = await refresh();
+        const restored = saved.cpsByBeat ?? {};
+        cpsByBeatRef.current = restored;
+        setCpsByBeat(restored);
+        setSession(name);
+        sessionRef.current = name;
+        setPicking(false);
+        setSessions(await desktop.sessions.list());
+        sessionStateHydratedRef.current = true;
+
+        const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
+        if (beat) {
+          adopt(beat, await desktop.beats.read(beat));
+        } else {
+          setOpen(undefined);
+          openRef.current = undefined;
+        }
+      }),
+    [adopt, attempt, refresh],
+  );
+
+  // Remember where the session was left, so reopening it lands where you were.
+  useEffect(() => {
+    if (!sessionRef.current || !sessionStateHydratedRef.current) {
+      return;
+    }
+    void desktop.sessions.setState(sessionRef.current, {
+      ...(open ? { beat: open } : {}),
+      cpsByBeat,
+      beatSort,
+      manualBeatOrder,
+    });
+  }, [open, cpsByBeat, beatSort, manualBeatOrder]);
+
+  const changeSort = useCallback((mode: BeatSortMode) => {
+    if (mode === 'manual') {
+      const completeOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
+      manualBeatOrderRef.current = completeOrder;
+      setManualBeatOrder(completeOrder);
+    }
+    beatSortRef.current = mode;
+    setBeatSort(mode);
+  }, []);
+
+  const reorder = useCallback((from: string, to: string, position: 'before' | 'after' = 'before') => {
+    const currentOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
+    const nextOrder = moveBeat({ order: currentOrder, from, to, position });
+    manualBeatOrderRef.current = nextOrder;
+    setManualBeatOrder(nextOrder);
+  }, []);
+
+  const changeTempo = useCallback(
+    (next: number) => {
+      if (codedTempo) {
+        return;
+      }
+      const clamped = clampCps(next);
+      changeCps(clamped);
+      if (!openRef.current) {
+        return;
+      }
+      const nextByBeat = { ...cpsByBeatRef.current, [openRef.current]: clamped };
+      cpsByBeatRef.current = nextByBeat;
+      setCpsByBeat(nextByBeat);
+    },
+    [changeCps, codedTempo],
+  );
+
+  const previousCodedTempo = useRef(false);
+  useEffect(() => {
+    if (open && previousCodedTempo.current && !codedTempo) {
+      changeCps(cpsByBeatRef.current[open] ?? cpsRef.current);
+    } else if (codedTempo && !previousCodedTempo.current) {
+      releaseCps();
+    }
+    previousCodedTempo.current = codedTempo;
+  }, [codedTempo, changeCps, open, releaseCps]);
+
+  const openBeat = useCallback(
+    async (name: string) => {
+      adopt(name, await desktop.beats.read(name));
+      // Re-evaluating swaps the pattern in place. The scheduler keeps counting,
+      // so the new beat lands on the next cycle boundary and the bar holds.
+      reevaluate();
+    },
+    [adopt, reevaluate],
+  );
+
+  /** Clone the open beat and move to the copy, without interrupting the sound. */
+  const cloneBeat = useCallback(
+    () =>
+      attempt(async () => {
+        if (!openRef.current) {
+          return;
+        }
+        const content = bufferRef.current;
+        const name = nextCloneName(openRef.current, await desktop.beats.list());
+        await desktop.beats.create(name, content);
+        await refresh();
+        // The code is unchanged. When audio is already active, reevaluation
+        // hands the scheduler over to the clone without restarting the sound.
+        handoffClonedBeat({
+          playing: state.started,
+          activate: () => adopt(name, content),
+          reevaluate,
+        });
+      }),
+    [adopt, attempt, reevaluate, refresh, state.started],
+  );
+
+  const save = useCallback(async () => {
+    if (!openRef.current) {
+      return;
+    }
+    const content = bufferRef.current;
+    await desktop.beats.write(openRef.current, content);
+    savedRef.current = content;
+    setBuffer(content);
+  }, []);
+
+  // Disk changes. The rule in shared/sync.ts decides; this only carries it out.
+  useEffect(() => {
+    return desktop.beats.onChange(async (change) => {
+      void refresh();
+      if (change.name !== openRef.current || change.event === 'unlink') {
+        return;
+      }
+      const diskContent = await desktop.beats.read(change.name);
+      const decision = resolveDiskChange({
+        diskContent,
+        bufferContent: bufferRef.current,
+        lastSavedContent: savedRef.current,
+      });
+      if (decision.kind === 'noop') {
+        savedRef.current = diskContent;
+        return;
+      }
+      if (decision.kind === 'apply') {
+        savedRef.current = decision.content;
+        bufferRef.current = decision.content;
+        setBuffer(decision.content);
+        setCode(decision.content);
+        reevaluate();
+        return;
+      }
+      setConflict(decision.diskContent);
+    });
+  }, [refresh, setCode, reevaluate]);
+
+  const takeTheirs = useCallback(() => {
+    if (conflict === undefined || !openRef.current) {
+      return;
+    }
+    adopt(openRef.current, conflict);
+    reevaluate();
+  }, [adopt, conflict, reevaluate]);
+
+  const keepMine = useCallback(() => {
+    setConflict(undefined);
+    void save();
+  }, [save]);
+
+  const create = useCallback(
+    (raw: string) =>
+      attempt(async () => {
+        const file = normalizeBeatName(raw);
+        await desktop.beats.create(file, STARTER);
+        await refresh();
+        adopt(file, STARTER);
+      }),
+    [adopt, attempt, refresh],
+  );
+
+  const rename = useCallback(
+    (from: string, raw: string) =>
+      attempt(async () => {
+        const file = normalizeBeatName(raw);
+        const currentOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
+        await desktop.beats.rename(from, file);
+        const renamedOrder = currentOrder.map((name) => (name === from ? file : name));
+        manualBeatOrderRef.current = renamedOrder;
+        setManualBeatOrder(renamedOrder);
+        await refresh();
+        setOpen(file);
+        openRef.current = file;
+      }),
+    [attempt, refresh],
+  );
+
+  const remove = useCallback(
+    (name: string) =>
+      attempt(async () => {
+        await desktop.beats.remove(name);
+        const list = await refresh();
+        const next = list[0]?.name;
+        if (next) {
+          adopt(next, await desktop.beats.read(next));
+        } else {
+          setOpen(undefined);
+          openRef.current = undefined;
+        }
+      }),
+    [adopt, attempt, refresh],
+  );
+
+  // The snapshot is how a harness sees the live buffer and the meters. The
+  // file on disk only holds the last save, so without this the agent reasons
+  // about older code than is on screen. Faster while playing, because that is
+  // when the meters mean anything.
+  useEffect(() => {
+    const publish = () =>
+      writeSnapshot({
+        appBuilt: APP_BUILT,
+        beat: openRef.current,
+        unsavedEdits: bufferRef.current !== savedRef.current,
+        playing: state.started,
+        cps,
+        updated: new Date().toISOString(),
+        buffer: bufferRef.current,
+        audio: readAudio(),
+      });
+    publish();
+    const timer = window.setInterval(publish, state.started ? 500 : 2000);
+    return () => window.clearInterval(timer);
+  }, [state.started, cps, buffer, open]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey && event.key === 's') {
+        event.preventDefault();
+        void save();
+      }
+      if (event.ctrlKey && event.key === '.') {
+        event.preventDefault();
+        toggle();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [save, toggle]);
+
+  if (picking) {
+    return (
+      <SessionPicker
+        sessions={sessions}
+        root={root}
+        error={beatError}
+        onOpen={(name) => void openSession(name)}
+        onCreate={(name) => void openSession(name, true)}
+        onCancel={session ? () => setPicking(false) : undefined}
+      />
+    );
+  }
+
+  return (
+    <div className="app">
+      <header className="titlebar">
+        <button
+          className="collapse"
+          onClick={() => setTreeOpen(treeOpen ? 0 : 1)}
+          title={treeOpen ? 'Hide beats' : 'Show beats'}
+        >
+          {treeOpen ? '[<]' : '[>]'}
+        </button>
+        <button className="collapse" onClick={() => setPicking(true)} title="Switch session">
+          {session ?? 'sessions'}
+        </button>
+        <span className="beat">
+          <b>{open?.replace(/\.js$/, '') ?? 'no beat'}</b>
+          {dirty ? ' *' : ''}
+        </span>
+        <span className="transport">
+          <button onClick={toggle}>{state.started ? '■ stop' : '▶ play'}</button>
+          <button onClick={() => void save()} disabled={!dirty}>
+            save
+          </button>
+          <button onClick={() => void cloneBeat()} disabled={!open} title="Clone this beat and switch to it">
+            save new
+          </button>
+          <button onClick={() => changeTempo(cps - 0.05)} title="Slower" disabled={codedTempo}>
+            −
+          </button>
+          <TempoBox cps={cps} coded={codedTempo} onChange={changeTempo} />
+          <button onClick={() => changeTempo(cps + 0.05)} title="Faster" disabled={codedTempo}>
+            +
+          </button>
+        </span>
+        <span className="transport right">
+          <button
+            className="collapse"
+            onClick={() => setTermOpen(termOpen ? 0 : 1)}
+            title={termOpen ? 'Hide harness' : 'Show harness'}
+          >
+            {termOpen ? '[>]' : '[<]'}
+          </button>
+        </span>
+      </header>
+
+      <div
+        className="panes"
+        style={
+          {
+            '--tree-w': treeOpen ? `${treeWidth}px` : '0px',
+            '--grip-w': treeOpen ? '5px' : '0px',
+            '--term-w': termOpen ? `${termWidth}px` : '0px',
+            '--term-grip-w': termOpen ? '5px' : '0px',
+          } as CSSProperties
+        }
+      >
+        {treeOpen ? (
+          <FileTree
+            beats={beats}
+            open={open}
+            dirty={dirty}
+            error={beatError}
+            onOpen={(name) => void openBeat(name)}
+            onCreate={(name) => void create(name)}
+            onRename={(from, to) => void rename(from, to)}
+            onRemove={(name) => void remove(name)}
+            sortMode={beatSort}
+            manualOrder={manualBeatOrder}
+            onSortChange={changeSort}
+            onReorder={reorder}
+            onDismissError={() => setBeatError(undefined)}
+          />
+        ) : (
+          <div />
+        )}
+
+        {/* 210px is where the pane header stops fitting its own title. */}
+        <Grip width={treeWidth} onChange={setTreeWidth} side="left" min={210} max={560} />
+
+        <section className="pane">
+          <header className="pane-title">
+            <span>[ edit ]</span>
+            <span style={{ textTransform: 'none', color: 'var(--ink-faint)' }}>⌘S save · ⌃. play</span>
+          </header>
+          {conflict !== undefined && <ConflictBar onTakeTheirs={takeTheirs} onKeepMine={keepMine} />}
+          <div className="pane-body editor" ref={containerRef} />
+        </section>
+
+        <Grip width={termWidth} onChange={setTermWidth} side="right" min={260} max={1000} />
+
+        {harnesses.length > 0 && <HarnessPane harnesses={harnesses} active={harness} onPick={setHarness} beat={open} />}
+      </div>
+
+      <StatusBar
+        root={root}
+        beat={open}
+        dirty={dirty}
+        playing={state.started}
+        cps={cps}
+        harness={harness}
+        error={state.error?.message}
+      />
+    </div>
+  );
+}

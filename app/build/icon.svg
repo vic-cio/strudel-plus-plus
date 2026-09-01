@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 128 128" shape-rendering="crispEdges">
+  <title>strudel++</title>
+  <rect width="128" height="128" fill="#2f1d16"/>
+  <rect x="8" y="8" width="112" height="112" fill="#3a251d"/>
+  <path fill="#6b4a33" d="M8 8h112v4H8zM8 116h112v4H8zM8 8h4v112H8zM116 8h4v112h-4z"/>
+
+  <!-- A block-built S keeps the Strudel mark legible at dock and tray sizes. -->
+  <path fill="#e2643c" d="M32 24h64v16H40v8h48v16H40v8h48v16H40v8h56v16H32V96H24V80h16V72H32V64H24V40h8z"/>
+  <path fill="#e0a83c" d="M40 28h48v4H40zM28 40h4v20h-4zM40 60h44v4H40zM84 68h4v20h-4zM40 92h48v4H40zM28 84h4v12h-4z"/>
+  <rect x="88" y="28" width="8" height="8" fill="#efe7d3"/>
+</svg>
