@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readlink, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readlink, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -67,6 +67,8 @@ describe('createSessionStore', () => {
   it('remembers the beat and tempo a session was left on', async () => {
     const store = createSessionStore(root);
     await store.create('set');
+    await writeFile(join(root, 'set', 'intro.js'), '');
+    await writeFile(join(root, 'set', 'outro.js'), '');
     const firstBeat = { beat: 'intro.js', cpsByBeat: { 'intro.js': 0.62 } };
     await store.setState('set', firstBeat);
     const secondBeat = { beat: 'outro.js', cpsByBeat: { 'outro.js': 0.78 } };
@@ -80,6 +82,8 @@ describe('createSessionStore', () => {
   it('remembers the sidebar sort mode and manual beat order', async () => {
     const store = createSessionStore(root);
     await store.create('set');
+    await writeFile(join(root, 'set', 'intro.js'), '');
+    await writeFile(join(root, 'set', 'advanced.js'), '');
     await store.setState('set', {
       beatSort: 'manual',
       manualBeatOrder: ['intro.js', 'advanced.js'],
@@ -102,6 +106,58 @@ describe('createSessionStore', () => {
     await store.create('set');
     await writeFile(join(root, 'set', '.session.json'), 'not json');
     await expect(store.getState('set')).resolves.toEqual({});
+  });
+
+  it('drops remembered tempo for beats that no longer exist when loaded', async () => {
+    // Clones get deleted and harnesses rename files; a tempo for a beat that
+    // is gone must not survive the load.
+    const store = createSessionStore(root);
+    await store.create('set');
+    await writeFile(join(root, 'set', 'alive.js'), '');
+    await store.setState('set', { cpsByBeat: { 'alive.js': 0.6, 'we begin-2.js': 0.75 } });
+    await expect(store.getState('set')).resolves.toEqual({ cpsByBeat: { 'alive.js': 0.6 } });
+  });
+
+  it('drops manual beat order entries for beats that no longer exist when loaded', async () => {
+    const store = createSessionStore(root);
+    await store.create('set');
+    await writeFile(join(root, 'set', 'alive.js'), '');
+    await store.setState('set', { manualBeatOrder: ['alive.js', 'we begin-2.js'] });
+    await expect(store.getState('set')).resolves.toEqual({ manualBeatOrder: ['alive.js'] });
+  });
+
+  it('drops per-beat state for deleted beats when state is written', async () => {
+    // The file itself must be cleaned, so a harness reading .session.json
+    // never sees leftovers the app has not written again yet.
+    const store = createSessionStore(root);
+    await store.create('set');
+    await writeFile(join(root, 'set', 'alive.js'), '');
+    await store.setState('set', { cpsByBeat: { 'alive.js': 0.6, 'we begin-2.js': 0.75 } });
+    await store.setState('set', {});
+    await expect(store.getState('set')).resolves.toEqual({ cpsByBeat: { 'alive.js': 0.6 } });
+    const onDisk = JSON.parse(await readFile(join(root, 'set', '.session.json'), 'utf8')) as {
+      cpsByBeat?: Record<string, number>;
+    };
+    expect(onDisk.cpsByBeat).toEqual({ 'alive.js': 0.6 });
+  });
+
+  it('finds beats in subfolders when pruning, like the beat store does', async () => {
+    const store = createSessionStore(root);
+    await store.create('set');
+    await mkdir(join(root, 'set', 'drums'));
+    await writeFile(join(root, 'set', 'drums', 'intro.js'), '');
+    await store.setState('set', { cpsByBeat: { 'drums/intro.js': 0.5, 'gone.js': 0.9 } });
+    await expect(store.getState('set')).resolves.toEqual({ cpsByBeat: { 'drums/intro.js': 0.5 } });
+  });
+
+  it('keeps an explicit null beat, recording that nothing is open', async () => {
+    const store = createSessionStore(root);
+    await store.create('set');
+    await store.setState('set', { beat: 'intro.js' });
+    await store.setState('set', { beat: null });
+    await expect(store.getState('set')).resolves.toEqual({ beat: null });
+    const onDisk = JSON.parse(await readFile(join(root, 'set', '.session.json'), 'utf8')) as { beat?: string | null };
+    expect(onDisk.beat).toBeNull();
   });
 });
 
