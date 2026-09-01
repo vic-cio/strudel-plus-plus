@@ -27,8 +27,12 @@ app can also spawn helpers like you in this folder over a terminal pane.
 - A beat is a plain \`.js\` file holding a Strudel pattern. Beats may live in
   subfolders (for example \`drums/intro.js\`). A new session starts with one
   \`untitled.js\` starter beat.
-- The live beat is the one open in the app's editor. Find its name in the
-  \`beat\` field of \`.session.json\` in this folder.
+- The live beat is the one open in the app's editor. Its name is in the
+  \`beat\` field of \`.session.json\` in this folder, and that field is the
+  only source of truth for it. Edit only that file: never guess, never fall
+  back to the first beat file or any other. If \`.session.json\` is missing
+  or unreadable, or its \`beat\` field is absent or names a file that does
+  not exist, ask the human which beat to edit instead of choosing.
 
 ## Editing live
 
@@ -99,7 +103,16 @@ description: Edit the beat file that is live in the strudel++ app so the change 
 1. Read \`.session.json\` in this folder. Its \`beat\` field names the beat
    open in the app's editor — that exact file is the one to edit. Beats are
    \`.js\` files here, possibly in subfolders.
-2. Edit that file with a small, coherent change, keeping it parseable
+2. Determine the beat ONLY from that \`beat\` field, and edit ONLY that
+   file. Never guess and never fall back to "the first beat file", the most
+   recently modified one, or any other file, however strong the pull — the
+   state file can lag the screen, and the human's request is about what is
+   on it.
+3. If \`.session.json\` is missing or unreadable, its \`beat\` field is
+   absent, or the named file does not exist or is otherwise ambiguous (a
+   folder, a non-\`.js\` file, several plausible matches), STOP and ask the
+   human which beat to edit instead of choosing one.
+4. Edit the chosen file with a small, coherent change, keeping it parseable
    JavaScript. One change per write.
 
 ## How a write becomes sound
@@ -119,8 +132,10 @@ description: Edit the beat file that is live in the strudel++ app so the change 
 - Leave \`setcps\`/\`setcpm\` lines alone unless tempo is the request; a
   beat that declares its own tempo ignores the app's tempo control.
 - Do not reformat or rewrite the whole file to make a small change.
-- If \`.session.json\` has no \`beat\` field, nothing is open yet; ask the
-  human which beat to work on instead of guessing.
+- If the beat cannot be determined safely — no \`.session.json\`, no
+  \`beat\` field, a \`beat\` that names a missing file, or anything else
+  ambiguous — ask the human which beat to work on; do not guess and do not
+  pick one yourself.
 `,
   'live-audio-state': `---
 name: live-audio-state

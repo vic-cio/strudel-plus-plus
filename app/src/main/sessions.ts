@@ -6,7 +6,8 @@ import { seedHarnessContent } from './harnessContent';
 
 export type Session = { name: string; beats: number; usedAt: number };
 export type SessionState = {
-  beat?: string;
+  /** The beat the EDIT buffer shows; an explicit null records that nothing is open. */
+  beat?: string | null;
   cpsByBeat?: Record<string, number>;
   beatSort?: BeatSortMode;
   manualBeatOrder?: string[];
@@ -143,23 +144,28 @@ export function createSessionStore(root: string): SessionStore {
 
     async touch(name) {
       const full = locate(name);
-      await write(full, { ...(await read(full)), usedAt: nextUsedAt() });
+      const { usedAt: _usedAt, ...state } = await read(full);
+      await write(full, { ...(await pruneStaleState(full, state)), usedAt: nextUsedAt() });
       await linkShared(base, full);
     },
 
     async getState(name) {
-      const { usedAt: _usedAt, ...state } = await read(locate(name));
-      return state;
+      const full = locate(name);
+      const { usedAt: _usedAt, ...state } = await read(full);
+      return pruneStaleState(full, state);
     },
 
     async setState(name, state) {
       const full = locate(name);
       const previous = await read(full);
-      await write(full, {
+      const merged: SessionState = {
         ...previous,
         ...state,
         ...(state.cpsByBeat ? { cpsByBeat: { ...previous.cpsByBeat, ...state.cpsByBeat } } : {}),
-      });
+      };
+      // Written state is the one place every writer funnels through, so this
+      // is where per-beat leftovers of deleted beats get dropped.
+      await write(full, await pruneStaleState(full, merged));
     },
   };
 }
@@ -173,6 +179,9 @@ async function read(sessionPath: string): Promise<StoredState> {
     const state: StoredState = {};
     if (typeof parsed.beat === 'string') {
       state.beat = parsed.beat;
+    } else if (parsed.beat === null) {
+      // An explicit null records that the buffer showed no beat at all.
+      state.beat = null;
     }
     if (isTempoMap(parsed.cpsByBeat)) {
       state.cpsByBeat = parsed.cpsByBeat;
@@ -211,4 +220,62 @@ function isStringArray(value: unknown): value is string[] {
 
 async function write(sessionPath: string, state: StoredState): Promise<void> {
   await writeFile(join(sessionPath, STATE_FILE), JSON.stringify(state, null, 2), 'utf8');
+}
+
+/**
+ * Beat files that exist in the session right now, under the same rules the
+ * beat store lists them: dotfiles skipped, subfolders walked, `.js` counts.
+ */
+async function existingBeats(sessionPath: string): Promise<Set<string>> {
+  const names = new Set<string>();
+  async function walk(dir: string, prefix: string): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) {
+        continue;
+      }
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(join(dir, entry.name), name);
+      } else if (entry.name.endsWith(BEAT_EXTENSION)) {
+        names.add(name);
+      }
+    }
+  }
+  await walk(sessionPath, '');
+  return names;
+}
+
+/**
+ * Drop per-beat state whose beat no longer exists. Clones get deleted, files
+ * get renamed by a harness, and a tempo or drag order for a beat that is gone
+ * is nothing but a lie the next open would inherit.
+ */
+async function pruneStaleState(sessionPath: string, state: SessionState): Promise<SessionState> {
+  let existing: Set<string>;
+  try {
+    existing = await existingBeats(sessionPath);
+  } catch {
+    // Pruning needs to know which beats exist; without that (folder gone,
+    // unreadable) hand the state back untouched rather than guessing.
+    return state;
+  }
+  const pruned: SessionState = { ...state };
+  if (pruned.cpsByBeat) {
+    const tempos = Object.fromEntries(Object.entries(pruned.cpsByBeat).filter(([name]) => existing.has(name)));
+    if (Object.keys(tempos).length > 0) {
+      pruned.cpsByBeat = tempos;
+    } else {
+      delete pruned.cpsByBeat;
+    }
+  }
+  if (pruned.manualBeatOrder) {
+    const order = pruned.manualBeatOrder.filter((name) => existing.has(name));
+    if (order.length > 0) {
+      pruned.manualBeatOrder = order;
+    } else {
+      delete pruned.manualBeatOrder;
+    }
+  }
+  return pruned;
 }

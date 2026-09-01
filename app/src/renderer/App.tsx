@@ -71,7 +71,6 @@ export function App() {
   const beatsRef = useRef<BeatSummary[]>([]);
   const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
   const manualBeatOrderRef = useRef<string[]>([]);
-  const sessionStateHydratedRef = useRef(false);
   openRef.current = open;
 
   const onCodeChange = useCallback((code: string) => {
@@ -82,6 +81,25 @@ export function App() {
   const { containerRef, state, setCode, toggle, cps, changeCps, releaseCps, reevaluate } = useStrudel(onCodeChange);
   const sessionRef = useRef<string>(undefined);
   sessionRef.current = session;
+
+  /**
+   * The EDIT buffer's beat changed — record it now, at the event.
+   *
+   * The pointer must mirror the buffer the moment it moves, so the events
+   * that move the buffer call this directly instead of leaving the write to
+   * a render effect: a render can be skipped (same-state bailouts) or run
+   * while the open beat still belongs to the previous session, and either
+   * one leaves .session.json pointing at a beat the human stopped looking
+   * at long ago — exactly what a harness then reads and edits. An explicit
+   * null records that nothing is open.
+   */
+  const persistBeat = useCallback((name: string | null) => {
+    const session = sessionRef.current;
+    if (!session) {
+      return;
+    }
+    void desktop.sessions.setState(session, { beat: name });
+  }, []);
   const cpsRef = useRef(cps);
   cpsRef.current = cps;
   const cpsByBeatRef = useRef(cpsByBeat);
@@ -115,8 +133,9 @@ export function App() {
       setCode(content);
       setConflict(undefined);
       applyBeatTempo(name, content);
+      persistBeat(name);
     },
-    [applyBeatTempo, setCode],
+    [applyBeatTempo, persistBeat, setCode],
   );
 
   /** Report what went wrong instead of dropping it on the floor. */
@@ -159,46 +178,68 @@ export function App() {
       attempt(async () => {
         await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
         const saved = await desktop.sessions.state(name);
+        const list = await refresh();
+        // Resolve everything the open needs — including the restored beat's
+        // content — before touching any state. A failure up to here leaves
+        // the previous session exactly as it was, with the picker showing
+        // what went wrong.
         const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
         const restoredManualOrder = saved.manualBeatOrder ?? [];
-        sessionStateHydratedRef.current = false;
+        const restoredCps = saved.cpsByBeat ?? {};
+        const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
+        const content = beat ? await desktop.beats.read(beat) : undefined;
+
+        // From here the open is synchronous: the app flips to the new session
+        // in one render with no await in between. The previous code set a
+        // hydration flag across awaits, and a failure in that window blocked
+        // session-state writes for the rest of the run — freezing the
+        // persisted beat on whatever an earlier open had written, which the
+        // harness then read and edited. No await, no window.
         beatSortRef.current = restoredSort;
         manualBeatOrderRef.current = restoredManualOrder;
+        cpsByBeatRef.current = restoredCps;
         setBeatSort(restoredSort);
         setManualBeatOrder(restoredManualOrder);
-        const list = await refresh();
-        const restored = saved.cpsByBeat ?? {};
-        cpsByBeatRef.current = restored;
-        setCpsByBeat(restored);
+        setCpsByBeat(restoredCps);
         setSession(name);
         sessionRef.current = name;
         setPicking(false);
-        setSessions(await desktop.sessions.list());
-        sessionStateHydratedRef.current = true;
+        // The picker's recency counts are cosmetic; a failure refreshing
+        // them must not undo the open.
+        try {
+          setSessions(await desktop.sessions.list());
+        } catch {
+          // Keep the list the picker already had.
+        }
 
-        const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
-        if (beat) {
-          adopt(beat, await desktop.beats.read(beat));
+        if (beat && content !== undefined) {
+          adopt(beat, content);
         } else {
           setOpen(undefined);
           openRef.current = undefined;
+          // Nothing is open; say so, rather than leaving a beat name behind
+          // that no longer resolves to a file on disk.
+          persistBeat(null);
         }
       }),
-    [adopt, attempt, refresh],
+    [adopt, attempt, persistBeat, refresh],
   );
 
-  // Remember where the session was left, so reopening it lands where you were.
+  // Remember tempo and sort with the session, so reopening restores them.
+  // The beat pointer is deliberately not written here: it is persisted by the
+  // events that move the buffer (adopt, rename, remove), because a render
+  // scheduled by a tempo or sort change must never write a beat that belongs
+  // to another moment.
   useEffect(() => {
-    if (!sessionRef.current || !sessionStateHydratedRef.current) {
+    if (!sessionRef.current) {
       return;
     }
     void desktop.sessions.setState(sessionRef.current, {
-      ...(open ? { beat: open } : {}),
       cpsByBeat,
       beatSort,
       manualBeatOrder,
     });
-  }, [open, cpsByBeat, beatSort, manualBeatOrder]);
+  }, [cpsByBeat, beatSort, manualBeatOrder]);
 
   const changeSort = useCallback((mode: BeatSortMode) => {
     if (mode === 'manual') {
@@ -351,8 +392,9 @@ export function App() {
         await refresh();
         setOpen(file);
         openRef.current = file;
+        persistBeat(file);
       }),
-    [attempt, refresh],
+    [attempt, persistBeat, refresh],
   );
 
   const remove = useCallback(
@@ -366,9 +408,10 @@ export function App() {
         } else {
           setOpen(undefined);
           openRef.current = undefined;
+          persistBeat(null);
         }
       }),
-    [adopt, attempt, refresh],
+    [adopt, attempt, persistBeat, refresh],
   );
 
   // The snapshot is how a harness sees the live buffer and the meters. The

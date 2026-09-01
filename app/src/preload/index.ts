@@ -18,7 +18,7 @@ const api = {
     state: (
       name: string,
     ): Promise<{
-      beat?: string;
+      beat?: string | null;
       cpsByBeat?: Record<string, number>;
       beatSort?: BeatSortMode;
       manualBeatOrder?: string[];
@@ -26,7 +26,7 @@ const api = {
     setState: (
       name: string,
       state: {
-        beat?: string;
+        beat?: string | null;
         cpsByBeat?: Record<string, number>;
         beatSort?: BeatSortMode;
         manualBeatOrder?: string[];

@@ -88,6 +88,37 @@ describe('seedHarnessContent', () => {
       DEFAULT_SKILLS['edit-live-beat']!,
     );
   });
+
+  it('pins the edit-live-beat skill to the session state beat pointer alone', async () => {
+    // The harness must edit exactly the file .session.json names — never a
+    // guess, never a fallback to the first beat file. A stale pointer once
+    // made an agent edit the first beat the session was ever opened with
+    // while another beat was on screen.
+    await createSessionStore(root).list();
+    const skill = (await readFile(skillPath('.claude', 'edit-live-beat'), 'utf8')).replace(/\s+/g, ' ');
+    expect(skill).toMatch(/ONLY/i);
+    expect(skill).toContain('never fall back');
+    expect(skill).toMatch(/first beat file/);
+  });
+
+  it('tells the agent to ask when the beat pointer is missing or ambiguous', async () => {
+    await createSessionStore(root).list();
+    // Missing state, unreadable state, a beat that does not exist: the answer
+    // is always the same — ask, never choose.
+    const skill = (await readFile(skillPath('.agents', 'edit-live-beat'), 'utf8')).replace(/\s+/g, ' ');
+    expect(skill).toMatch(/missing or unreadable/);
+    expect(skill).toMatch(/does not exist/);
+    expect(skill).toMatch(/ask the human which beat to edit/i);
+    expect(skill).toMatch(/instead of choosing/i);
+  });
+
+  it('carries the same beat-pointer guard in the seeded AGENTS.md', async () => {
+    await createSessionStore(root).list();
+    const agents = (await readFile(join(root, 'AGENTS.md'), 'utf8')).replace(/\s+/g, ' ');
+    expect(agents).toMatch(/only source of truth/);
+    expect(agents).toMatch(/never fall back/);
+    expect(agents).toMatch(/ask the human which beat to edit/i);
+  });
 });
 
 describe('shared content backfill for a pre-existing session', () => {
