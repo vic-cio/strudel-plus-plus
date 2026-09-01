@@ -273,4 +273,6 @@ async function main() {
   });
 }
 
-void main();
+// Exported so tests can await handler registration deterministically instead
+// of guessing how many microtask ticks main() needs.
+export const ready = main();

@@ -78,10 +78,8 @@ describe('openSession', () => {
     ptyStart.mockReset();
     ptyStart.mockReturnValue({ write: vi.fn(), resize: vi.fn(), kill: vi.fn() });
     vi.resetModules();
-    await import('./index');
-    // Flush the microtask queue so `void main()` finishes registering handlers.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    const mod = await import('./index');
+    await mod.ready;
   });
 
   it('rolls back beatsRoot and never adopts the new session when the harness restart fails', async () => {

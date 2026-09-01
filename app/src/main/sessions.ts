@@ -24,6 +24,16 @@ const STATE_FILE = '.session.json';
 const SHARED_FILES = ['AGENTS.md'] as const;
 const SHARED_FOLDERS = ['.claude', '.agents'] as const;
 
+// Date.now() can repeat across calls that land in the same millisecond (e.g. create()
+// immediately followed by touch()), which would make list()'s sort order depend on
+// filesystem readdir order instead of recency. Force each stamp to be strictly greater
+// than the last one handed out, while staying close to wall-clock time.
+let lastUsedAt = 0;
+function nextUsedAt(): number {
+  lastUsedAt = Math.max(Date.now(), lastUsedAt + 1);
+  return lastUsedAt;
+}
+
 /**
  * Point a session at the shared harness files.
  *
@@ -123,13 +133,13 @@ export function createSessionStore(root: string): SessionStore {
       await mkdir(full, { recursive: true });
       // Never open onto an empty screen with nothing to play.
       await writeFile(join(full, `untitled${BEAT_EXTENSION}`), STARTER_BEAT, 'utf8');
-      await write(full, { usedAt: Date.now() });
+      await write(full, { usedAt: nextUsedAt() });
       await linkShared(base, full);
     },
 
     async touch(name) {
       const full = locate(name);
-      await write(full, { ...(await read(full)), usedAt: Date.now() });
+      await write(full, { ...(await read(full)), usedAt: nextUsedAt() });
       await linkShared(base, full);
     },
 
