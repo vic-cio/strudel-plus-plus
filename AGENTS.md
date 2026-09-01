@@ -21,6 +21,16 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Keep `openSession`'s post-fetch mutation block free of awaits: it was once guarded by a hydration flag across awaits, and a mid-open failure blocked all session-state writes for the rest of the run, freezing the pointer on a long-gone beat — the stale answer a spawned agent then edited.
 - The session store prunes `cpsByBeat` and `manualBeatOrder` entries whose beat file no longer exists, on load (`getState`) and write (`setState`) in `app/src/main/sessions.ts`. New per-beat state fields belong in that prune; tests pin all of this.
 
+## Error surfaces: where failures may land
+
+- Pattern parse/eval failures are the editor's own state (`useStrudel`'s `state.error`, shown in the status bar); they must never escape as unhandled exceptions. The disk-change apply path (`applyDiskChange` in `app/src/renderer/App.tsx`) additionally guards `setCode`/`reevaluate` and routes unexpected throws to `setBeatError` (the tree error surface).
+- `reportErrors.ts` funnels global renderer failures to console AND to subscribers (`onRendererError`), which App surfaces; it is idempotent because the window listeners are global state. Main logs `render-process-gone`/`unresponsive` on the window — a renderer death otherwise leaves no trace anywhere.
+- A stale REPL error must be dropped when the buffer moves to other content (`clearError` in `useStrudel`, called from `adopt` and the apply path): stopped playback means no re-evaluation will refresh it.
+
+## Beat watcher ignore rule
+
+`watchBeats` skips dot-entries _relative to the watched root only_ (`ignored` in `app/src/main/watcher.ts`). Filtering on absolute path parts would silently deafen any sessions root under a dot-directory (e.g. worktrees like `.treehouse`), with no error anywhere. `watcher.test.ts` pins both sides of this rule.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

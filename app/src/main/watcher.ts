@@ -11,9 +11,23 @@ import type { BeatChange } from '../shared/ipc';
  * empty file and replaces a working pattern with nothing.
  */
 export function watchBeats(root: string, onChange: (change: BeatChange) => void): FSWatcher {
+  // Dot-directories are skipped only *inside* the watched root. The check has
+  // to look at the path relative to the root: filtering on absolute parts
+  // would also swallow a root that itself lives under a dot-directory (a
+  // worktree or a hidden folder), and the app would go deaf with no error.
+  const ignoreInsideRoot = (path: string) => {
+    const rel = relative(root, path);
+    if (rel === '') {
+      return false; // The root itself is never ignored.
+    }
+    if (rel.startsWith('..') || isAbsoluteRel(rel)) {
+      return false; // Outside the root; not ours to judge.
+    }
+    return rel.split(sep).some((part) => part.startsWith('.'));
+  };
   const watcher = chokidar.watch(root, {
     ignoreInitial: true,
-    ignored: (path: string) => path.split(sep).some((part) => part.startsWith('.')),
+    ignored: ignoreInsideRoot,
     awaitWriteFinish: { stabilityThreshold: 120, pollInterval: 30 },
   });
 
@@ -26,4 +40,9 @@ export function watchBeats(root: string, onChange: (change: BeatChange) => void)
 
   watcher.on('add', report('add')).on('change', report('change')).on('unlink', report('unlink'));
   return watcher;
+}
+
+/** A relative path is absolute when its first segment is a root or drive. */
+function isAbsoluteRel(rel: string): boolean {
+  return rel.startsWith('/') || /^[A-Za-z]:/.test(rel);
 }

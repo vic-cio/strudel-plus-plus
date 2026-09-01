@@ -139,6 +139,13 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     editorRef.current?.setCode(code);
   }, []);
 
+  /** Drop a stale REPL error. The editor only clears its error on the next
+   * evaluation, so adopting another beat while stopped would otherwise keep
+   * showing the previous beat's parse failure as if it were this one's. */
+  const clearError = useCallback(() => {
+    setState((prev) => (prev.error === undefined ? prev : { started: prev.started }));
+  }, []);
+
   const toggle = useCallback(() => {
     void editorRef.current?.toggle();
   }, []);
@@ -171,6 +178,7 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     containerRef,
     state,
     setCode,
+    clearError,
     toggle,
     evaluate,
     reevaluate,

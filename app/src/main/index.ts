@@ -177,6 +177,18 @@ async function main() {
       console.error(`[renderer] ${source}:${line} ${message}`);
     }
   });
+  // A renderer death or freeze is the kind of crash that leaves no macOS
+  // report behind, so the log is the only place it exists. Record it here:
+  // without this line a blank window and a dead pane have no story attached.
+  window.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[renderer] gone: ${details.reason} (exitCode ${details.exitCode})`);
+  });
+  window.webContents.on('unresponsive', () => {
+    console.error('[renderer] unresponsive: the UI thread stopped servicing events');
+  });
+  window.webContents.on('responsive', () => {
+    console.error('[renderer] responsive again');
+  });
   // Keep the app single-purpose: anything else opens in the real browser.
   window.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
