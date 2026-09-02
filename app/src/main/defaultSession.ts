@@ -10,7 +10,7 @@ import type { SessionState } from './sessions';
 
 import weBegin from '../../default-session/we begin.js?raw';
 import eightOhEight from '../../default-session/808ing.js?raw';
-import melody from '../../default-session/melody >:).js?raw';
+import melody from '../../default-session/melody >;).js?raw';
 import snapshotState from '../../default-session/session-state.json';
 
 export const DEFAULT_SESSION_NAME = 'we cook';
@@ -18,7 +18,7 @@ export const DEFAULT_SESSION_NAME = 'we cook';
 export const DEFAULT_SESSION_BEATS: Record<string, string> = {
   'we begin.js': weBegin,
   '808ing.js': eightOhEight,
-  'melody >:).js': melody,
+  'melody >;).js': melody,
 };
 
 // The snapshot's usedAt is a point-in-time capture from the captain's own
