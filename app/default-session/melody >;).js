@@ -6,11 +6,11 @@ stack(
     .lpf(300).lpq(8).distort(0.5).shape(0.3).gain(0.45)
     .slide(0.3).release(0.13),
   note("<c4 eb4 g4 bb4>*8")
-    .struct("<x ~ x x ~ x ~ x x ~ - x x x ~ x>*4")
-    .sometimesBy(0.4, x=>x.fast(2))
-    .rarely(x=>x.ply(1))
+    .struct("<x - x - - x - x x - - x x x - x>*4")
+    .sometimesBy(0.75, x=>x.fast(2))
     .s("gm_shamisen")
-    .gain(1.8).shape(0.55).room(0.6).size(0.35).delay(0.15).delaytime(0.1)
-    .attack(0.005).decay(0.2).sustain(0.1).release(0.1).pan(sine.slow(2).range(0.55, 0.75))
-    .gain("0.8 1 1 0.8 1 0.8 1 1"),
-).swingBy(1/8, 8)
+    .gain(1.65).shape(0.55).room(0.35).size(0.55).delay(0.1).delaytime(0.05)
+    .attack(0.005).decay(0.095).sustain(0.02).release(0.2).pan(sine.slow(2).range(0.45, 0.65))
+    .gain("0.8 1 0 0.8 1 0.8 1 0.8")
+    .distort(0.8),
+).swingBy(1/16, 8)
