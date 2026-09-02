@@ -89,6 +89,19 @@ vi.mock('./liveSnapshot', () => ({
   writeSnapshot: vi.fn(),
 }));
 
+// Rendering the harness pane needs two browser globals jsdom does not have.
+// The observer never fires here, so the terminal stays unopened — fine: the
+// pane's presence in the DOM is what the test below pins.
+class ResizeObserverStub {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+window.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver;
+if (!document.fonts) {
+  Object.defineProperty(document, 'fonts', { value: { ready: Promise.resolve() } });
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -123,6 +136,34 @@ async function openSessionFromPicker(user: ReturnType<typeof userEvent.setup>): 
   await user.click(screen.getByText('we cook'));
   await waitFor(() => expect(screen.getAllByText('we begin').length).toBeGreaterThan(0));
 }
+
+describe('App harness pane under pattern errors', () => {
+  it('keeps the harness pane mounted while a giant mini-parse error is shown', async () => {
+    // The mini parse error's message runs for hundreds of characters (the
+    // full token list it expected). That message is the one input that used
+    // to shove the fixed-width harness pane out of the window: the status
+    // bar slot refused to wrap and inflated the app's grid column. The pane
+    // must stay in the UI — and in the DOM — with the error showing.
+    const giantError =
+      '[mini] parse error at line 4: Expected "!", "(", "*", ",", "..", "/", ":", "<", ">", "?", "[", "{", ' +
+      '[@_], a letter, a number, "-", "#", ".", "^", "_", or whitespace but "\'" found.';
+    desktop.harness.list.mockResolvedValue([{ id: 'shell', label: 'shell' }] as never);
+    const view = render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+
+    // The error arrives while playing (a watcher apply, say). Adopting on
+    // open cleared anything stale, so set it now — as a re-evaluation would.
+    repl.state = { started: true, error: new Error(giantError) };
+    view.rerender(<App />);
+
+    // The status bar shows the whole failure (title) with the text truncated
+    // by CSS, and the harness pane is still right there beside the editor.
+    expect(screen.getByTitle(giantError)).toBeTruthy();
+    expect(screen.getByText('[ harness ]')).toBeTruthy();
+    expect(document.querySelector('.term')).not.toBeNull();
+  });
+});
 
 describe('App session state', () => {
   it('persists the focused beat when the EDIT buffer moves to another beat', async () => {
