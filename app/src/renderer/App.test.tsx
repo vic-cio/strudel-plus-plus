@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { App } from './App';
@@ -105,6 +105,8 @@ window.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver
 if (!document.fonts) {
   Object.defineProperty(document, 'fonts', { value: { ready: Promise.resolve() } });
 }
+// jsdom also ships no pointer capture; the pane grips call it on pointerdown.
+window.HTMLElement.prototype.setPointerCapture ??= () => {};
 
 afterEach(() => {
   cleanup();
@@ -372,5 +374,123 @@ describe('App harness-edit hardening', () => {
     // status bar must not keep accusing the newly adopted beat of it.
     await waitFor(() => expect(screen.queryByText(/parse error/)).toBeNull());
     expect(repl.clearError).toHaveBeenCalled();
+  });
+});
+
+describe('App dock resize', () => {
+  beforeEach(() => {
+    localStorage.removeItem('pane.dock');
+  });
+
+  /** The --dock-h value the app grid currently sizes the dock row to. */
+  function dockH(): string {
+    const app = document.querySelector('.app') as HTMLElement | null;
+    expect(app).not.toBeNull();
+    return app!.style.getPropertyValue('--dock-h');
+  }
+
+  it('sits a horizontal separator grip between the panes and the dock', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const rows = Array.from(document.querySelector('.app')!.children);
+    expect(rows[1]?.className).toBe('panes');
+    expect(rows[2]?.className).toBe('grip grip-h');
+    expect(rows[2]?.getAttribute('role')).toBe('separator');
+    expect(rows[2]?.getAttribute('aria-orientation')).toBe('horizontal');
+    expect(rows[3]?.className).toBe('dock');
+    expect(dockH()).toBe('104px');
+  });
+
+  it('resizes the dock by dragging the grip and persists the height', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const grip = screen.getByRole('separator', { name: 'Resize plugin dock' });
+    fireEvent.pointerDown(grip, { pointerId: 1, clientY: 400 });
+    fireEvent.pointerMove(grip, { pointerId: 1, clientY: 300 });
+    fireEvent.pointerUp(grip, { pointerId: 1 });
+
+    expect(dockH()).toBe('204px');
+    expect(localStorage.getItem('pane.dock')).toBe('204');
+  });
+
+  it('restores the persisted height on the next launch', async () => {
+    localStorage.setItem('pane.dock', '220');
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    expect(dockH()).toBe('220px');
+  });
+
+  it('clamps a tall dock against the window height and follows live resizes', async () => {
+    // jsdom's default window is 768px tall, so the dock ceiling is 547.
+    localStorage.setItem('pane.dock', '900');
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    expect(dockH()).toBe('547px');
+
+    // The window shrinks below the stored height: the dock must follow, not
+    // starve the editor and harness rows above it.
+    const innerHeight = vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(420);
+    fireEvent(window, new Event('resize'));
+    expect(dockH()).toBe('199px');
+    innerHeight.mockRestore();
+  });
+
+  it('keeps an out-of-range preference when clamp interactions do not move the dock', async () => {
+    localStorage.setItem('pane.dock', '900');
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const grip = screen.getByRole('separator', { name: 'Resize plugin dock' });
+    grip.focus();
+    await user.keyboard('{ArrowUp}');
+    fireEvent.pointerDown(grip, { pointerId: 1, clientY: 400 });
+    fireEvent.pointerMove(grip, { pointerId: 1, clientY: 300 });
+    fireEvent.pointerUp(grip, { pointerId: 1 });
+
+    expect(dockH()).toBe('547px');
+    expect(localStorage.getItem('pane.dock')).toBe('900');
+
+    cleanup();
+    localStorage.setItem('pane.dock', '10');
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const lowerGrip = screen.getByRole('separator', { name: 'Resize plugin dock' });
+    lowerGrip.focus();
+    await user.keyboard('{ArrowDown}');
+    fireEvent.pointerDown(lowerGrip, { pointerId: 1, clientY: 400 });
+    fireEvent.pointerMove(lowerGrip, { pointerId: 1, clientY: 10000 });
+    fireEvent.pointerUp(lowerGrip, { pointerId: 1 });
+
+    expect(dockH()).toBe('56px');
+    expect(localStorage.getItem('pane.dock')).toBe('10');
+  });
+
+  it('never clamps the dock below its floor', async () => {
+    localStorage.setItem('pane.dock', '10');
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    expect(dockH()).toBe('56px');
+  });
+
+  it('resizes the dock from the keyboard and persists it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const grip = screen.getByRole('separator', { name: 'Resize plugin dock' });
+    grip.focus();
+    await user.keyboard('{ArrowUp}');
+
+    expect(dockH()).toBe('120px');
+    expect(localStorage.getItem('pane.dock')).toBe('120');
   });
 });

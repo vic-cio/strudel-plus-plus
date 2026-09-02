@@ -52,8 +52,9 @@ and a small skill set under `.claude/skills/` and `.agents/skills/`
 sessions pick the shared content up as links when they are opened.
 
 The sidebar supports newest-first, name A–Z, and per-session manual ordering.
-Sorting, remembered per-beat tempo values, and the plugin dock's layout and
-per-plugin state live in `.session.json`.
+Sorting, remembered per-beat tempo values, and the plugin dock's tabs, splits,
+and per-plugin state live in `.session.json`. Pane widths and the plugin dock
+height are local UI preferences and survive an app restart.
 
 `harnesses.json` defines the coding helpers shown in the pane. Each helper runs
 in a fresh pty rooted at the selected session. The login-shell PATH is used so
