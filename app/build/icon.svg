@@ -1,23 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 16 16" shape-rendering="crispEdges">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 32 32" shape-rendering="crispEdges">
   <title>strudel++</title>
-  <rect width="16" height="16" fill="#17121d"/>
-  <rect x="1" y="1" width="14" height="14" fill="#251a2b"/>
-  <path fill="#54365a" d="M1 1h14v1H1zM1 14h14v1H1zM1 1h1v14H1zM14 1h1v14h-1z"/>
+  <rect width="32" height="32" fill="#17121d"/>
+  <rect x="2" y="2" width="28" height="28" fill="#261b2e"/>
+  <path fill="#5b3c61" d="M2 2h28v2H2zM2 28h28v2H2zM2 2h2v28H2zM28 2h2v28h-2z"/>
 
-  <g data-icon-role="waveform" fill="#e8af42">
-    <rect x="3" y="5" width="1" height="4"/>
-    <rect x="4" y="3" width="1" height="8"/>
-    <rect x="5" y="5" width="1" height="4"/>
+  <!-- A stepped S silhouette with two deliberately marked inner gaps. -->
+  <g data-icon-role="s-silhouette" fill="#eb6248">
+    <rect x="8" y="5" width="19" height="4"/>
+    <rect x="5" y="8" width="5" height="7"/>
+    <rect x="8" y="14" width="17" height="4"/>
+    <rect x="23" y="17" width="5" height="7"/>
+    <rect x="7" y="24" width="18" height="4"/>
   </g>
 
-  <g data-icon-role="play" fill="#eb6248">
-    <path d="M7 3h1v1h1v1h1v1h1v1h1v1h1v2h-1v1h-1v1h-1v1H9v1H8v1H7z"/>
+  <g data-icon-role="upper-plus" fill="#f5e9c8">
+    <rect x="17" y="10" width="3" height="4"/>
+    <rect x="14" y="11" width="9" height="2"/>
   </g>
 
-  <g data-icon-role="timeline" fill="#f5e9c8">
-    <rect x="3" y="12" width="10" height="1"/>
-    <rect x="4" y="11" width="1" height="3"/>
-    <rect x="7" y="11" width="1" height="3"/>
-    <rect x="10" y="11" width="1" height="3"/>
+  <g data-icon-role="lower-plus" fill="#f5e9c8">
+    <rect x="13" y="19" width="3" height="4"/>
+    <rect x="10" y="20" width="9" height="2"/>
   </g>
 </svg>
