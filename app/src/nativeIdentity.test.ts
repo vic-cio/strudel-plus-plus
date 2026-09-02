@@ -1,10 +1,18 @@
 import desktopPackage from '../package.json';
-import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, extname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const PRODUCT_NAME = 'strudel++';
+const APP_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const CONFIGURED_ICON_PATH = resolve(APP_ROOT, desktopPackage.build.icon);
+const SOURCE_ICON_PATH = resolve(
+  dirname(CONFIGURED_ICON_PATH),
+  `${basename(CONFIGURED_ICON_PATH, extname(CONFIGURED_ICON_PATH))}.svg`,
+);
 
 describe('native app identity', () => {
   it('keeps the Electron build identity and verifies its packaged output', () => {
@@ -19,60 +27,24 @@ describe('native app identity', () => {
     expect(desktopPackage.scripts.build.split(' && ').at(-1)).toBe('npm run verify:identity');
   });
 
-  it('keeps the checked-in icon source pixel-aligned with the product mark', () => {
-    const source = readFileSync(new URL('../build/icon.svg', import.meta.url), 'utf8');
-    const GRID = 4;
+  it('keeps the checked-in SVG source and packaged PNG as the same rendered asset', () => {
+    expect(existsSync(SOURCE_ICON_PATH)).toBe(true);
 
-    const svgOpenTag = source.match(/<svg\b[^>]*>/)?.[0];
-    if (!svgOpenTag) {
-      throw new Error('icon.svg is missing an <svg> root element');
-    }
-    expect(svgOpenTag).toMatch(/shape-rendering="crispEdges"/);
+    const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'strudelpp-icon-'));
+    const renderedIconPath = resolve(temporaryDirectory, basename(CONFIGURED_ICON_PATH));
 
-    const title = source.match(/<title>([^<]*)<\/title>/)?.[1];
-    expect(title).toBe(PRODUCT_NAME);
-
-    const viewBox = svgOpenTag
-      .match(/viewBox="([\d.\s]+)"/)?.[1]
-      ?.split(/\s+/)
-      .map(Number);
-    if (!viewBox) {
-      throw new Error('icon.svg is missing a viewBox');
-    }
-    const [, , gridWidth, gridHeight] = viewBox;
-    if (gridWidth === undefined || gridHeight === undefined) {
-      throw new Error('icon.svg viewBox is missing width/height values');
-    }
-    expect(gridWidth % GRID).toBe(0);
-    expect(gridHeight % GRID).toBe(0);
-
-    const shapeCoordinates: number[] = [];
-    for (const rectTag of source.matchAll(/<rect\b[^>]*\/?>/g)) {
-      for (const attr of ['x', 'y', 'width', 'height']) {
-        const value = rectTag[0].match(new RegExp(`${attr}="(-?[\\d.]+)"`))?.[1];
-        if (value !== undefined) {
-          shapeCoordinates.push(Number(value));
-        }
-      }
-    }
-    for (const pathTag of source.matchAll(/<path\b[^>]*\bd="([^"]+)"/g)) {
-      const pathData = pathTag[1];
-      if (pathData === undefined) {
-        continue;
-      }
-      for (const numberMatch of pathData.matchAll(/-?\d+(?:\.\d+)?/g)) {
-        shapeCoordinates.push(Number(numberMatch[0]));
-      }
-    }
-
-    expect(shapeCoordinates.length).toBeGreaterThan(0);
-    for (const coordinate of shapeCoordinates) {
-      expect(Math.abs(coordinate % GRID)).toBe(0);
+    try {
+      execFileSync('sips', ['-s', 'format', 'png', SOURCE_ICON_PATH, '--out', renderedIconPath], {
+        stdio: 'pipe',
+      });
+      expect(readFileSync(renderedIconPath)).toEqual(readFileSync(CONFIGURED_ICON_PATH));
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
     }
   });
 
   it('ships a valid source icon asset', () => {
-    const electronIcon = readFileSync(new URL('../build/icon.png', import.meta.url));
+    const electronIcon = readFileSync(CONFIGURED_ICON_PATH);
     expect(electronIcon.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     expect(electronIcon.readUInt32BE(16)).toBe(1024);
     expect(electronIcon.readUInt32BE(20)).toBe(1024);
