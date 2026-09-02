@@ -47,3 +47,39 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
   patched.set(deps.proto, taps);
   return taps;
 }
+
+type TapContext = { state?: string; resume?: () => Promise<void> };
+
+/**
+ * Pick the tap that is actually reaching the speakers.
+ *
+ * A tap can outlive the context it points at: an offline render (a bounce,
+ * or superdough generating a reverb impulse response) connects to its own
+ * throwaway OfflineAudioContext.destination, which still passes as a
+ * destination and gets tapped. That context finishes and closes within
+ * milliseconds, and a closed context's analyser freezes on its last
+ * rendered frame forever. Picking "whatever was inserted last" then
+ * permanently prefers that dead tap over the live, running one. A closed
+ * context's tap is pruned from the map on sight since nothing will ever
+ * read it again; a merely suspended one gets an opportunistic resume.
+ */
+export function selectLiveTap(taps: Map<object, object>): object | undefined {
+  let running: object | undefined;
+  let fallback: object | undefined;
+  for (const [context, tap] of taps) {
+    const state = (context as TapContext).state;
+    if (state === 'closed') {
+      taps.delete(context);
+      continue;
+    }
+    if (state === 'running') {
+      running = tap;
+    } else {
+      fallback = tap;
+      if (state === 'suspended') {
+        void Promise.resolve((context as TapContext).resume?.()).catch(() => {});
+      }
+    }
+  }
+  return running ?? fallback;
+}

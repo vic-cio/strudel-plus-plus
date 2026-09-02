@@ -1,4 +1,4 @@
-import { installMasterTap } from './masterTap';
+import { installMasterTap, selectLiveTap } from './masterTap';
 
 /**
  * Patch before any audio node exists, which is why this is imported for its
@@ -11,7 +11,13 @@ export const masterTaps =
         proto: AudioNode.prototype as unknown as {
           connect: (this: object, ...args: never[]) => unknown;
         },
-        isDestination: (target) => target instanceof AudioDestinationNode,
+        // An OfflineAudioContext's destination is still an AudioDestinationNode,
+        // so an offline render (a bounce, or superdough rendering a reverb
+        // impulse response off `.room()`/`.size()`) would otherwise get tapped
+        // too. Excluding it keeps the map to contexts that actually reach the
+        // speakers — see selectLiveTap for what happens when one slips through.
+        isDestination: (target) =>
+          target instanceof AudioDestinationNode && !(target.context instanceof OfflineAudioContext),
         contextOf: (target) => (target as AudioDestinationNode).context,
         createAnalyser: (context) => {
           const analyser = (context as BaseAudioContext).createAnalyser();
@@ -21,11 +27,6 @@ export const masterTaps =
         },
       });
 
-/** The most recently tapped context is the one making sound. */
 export function masterAnalyser(): AnalyserNode | undefined {
-  let last: AnalyserNode | undefined;
-  for (const tap of masterTaps.values()) {
-    last = tap as AnalyserNode;
-  }
-  return last;
+  return selectLiveTap(masterTaps) as AnalyserNode | undefined;
 }
