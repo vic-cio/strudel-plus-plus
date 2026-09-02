@@ -325,6 +325,20 @@ describe('App beat drafts', () => {
     await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// latest editor code'));
   });
 
+  it('Cmd+S clears an older polled draft when saving newer editor content', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// older polled draft');
+    repl.getCode.mockReturnValue('// latest editor code');
+    desktop.beats.write.mockClear();
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+
+    await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// latest editor code'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBeNull());
+  });
+
   it('preserves a newer edit made while a save is in flight', async () => {
     const user = userEvent.setup();
     render(<App />);

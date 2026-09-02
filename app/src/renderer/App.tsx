@@ -264,16 +264,17 @@ export function App() {
   }, []);
 
   /** Capture the last editor value before an action moves focus elsewhere. */
-  const captureCurrentDraft = useCallback(() => {
+  const captureCurrentDraft = useCallback((): string | undefined => {
     const sessionName = sessionRef.current;
     const beatName = openRef.current;
     if (!sessionName || !beatName) {
-      return;
+      return undefined;
     }
     const content = getCode() ?? bufferRef.current;
     bufferRef.current = content;
     setBuffer(content);
     updateDraftState(recordDraft(draftStateRef.current, sessionName, beatName, content));
+    return content;
   }, [getCode, updateDraftState]);
 
   /** Open a session: point the app at its folder and restore where it was left. */
@@ -477,8 +478,10 @@ export function App() {
     if (!sessionName || !beatName) {
       return;
     }
-    const content = getCode() ?? bufferRef.current;
-    bufferRef.current = content;
+    const content = captureCurrentDraft();
+    if (content === undefined) {
+      return;
+    }
     await desktop.beats.write(beatName, content);
     if (sessionRef.current !== sessionName || openRef.current !== beatName) {
       updateDraftState(saveBeat(draftStateRef.current, sessionName, beatName, content));
@@ -493,7 +496,7 @@ export function App() {
     }
     updateDraftState(saveBeat(draftStateRef.current, sessionName, beatName, content));
     setBuffer(content);
-  }, [getCode, updateDraftState]);
+  }, [captureCurrentDraft, updateDraftState]);
 
   // Global renderer failures (an effect that threw, an IPC that rejected) are
   // already logged to the main process; surfacing them here keeps a failure a
