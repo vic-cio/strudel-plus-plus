@@ -134,9 +134,7 @@ const decodePng = (png: Buffer): DecodedPng => {
       const raw = byteAt(scanlines, scanlineStart + x + 1);
       const left = x >= bytesPerPixel ? byteAt(pixels, pixelStart + x - bytesPerPixel) : 0;
       const above = y > 0 ? byteAt(pixels, pixelStart + x - rowLength) : 0;
-      const upperLeft = y > 0 && x >= bytesPerPixel
-        ? byteAt(pixels, pixelStart + x - rowLength - bytesPerPixel)
-        : 0;
+      const upperLeft = y > 0 && x >= bytesPerPixel ? byteAt(pixels, pixelStart + x - rowLength - bytesPerPixel) : 0;
 
       let predictor: number;
       switch (filter) {
