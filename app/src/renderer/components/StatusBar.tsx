@@ -19,7 +19,11 @@ export function StatusBar({ root, beat, dirty, playing, cps, harness, error }: P
         {dirty ? ' *' : ''}
       </span>
       <span className="slot">harness: {harness}</span>
-      {error && <span className="slot warn">{error}</span>}
+      {error && (
+        <span className="slot warn" title={error}>
+          {error}
+        </span>
+      )}
       <span className="slot">{root}</span>
     </footer>
   );

@@ -238,6 +238,11 @@ button:disabled {
 .app {
   display: grid;
   grid-template-rows: 34px 1fr 22px;
+  /* minmax(0, 1fr) clamps the single column to the window. An auto track
+     sizes to the widest item's max-content, so one long unbreakable line
+     anywhere (a pattern error message in the status bar, say) used to widen
+     the whole app and push the fixed-width harness pane out of the window. */
+  grid-template-columns: minmax(0, 1fr);
   height: 100%;
   background: var(--ground);
 }
@@ -556,6 +561,7 @@ body[data-resizing='true'] {
 .status {
   display: flex;
   align-items: center;
+  overflow: hidden;
   border-top: 1px solid var(--line);
   background: var(--ground-sunk);
   background-image: var(--hatch);
@@ -567,6 +573,10 @@ body[data-resizing='true'] {
   padding: 0 10px;
   border-right: 1px solid var(--line);
   white-space: nowrap;
+  /* Every slot holds short text, so none may shrink mid-glyph. The error
+     slot below is the one that can grow without bound and absorbs all the
+     shrinking instead. */
+  flex-shrink: 0;
 }
 .status .slot:last-child {
   border-right: none;
@@ -574,6 +584,9 @@ body[data-resizing='true'] {
   border-left: 1px solid var(--line);
   overflow: hidden;
   text-overflow: ellipsis;
+  /* The sessions root can be a long path; it ellipsizes like the error. */
+  flex-shrink: 1;
+  min-width: 0;
 }
 .status .on {
   color: var(--olive);
@@ -583,4 +596,12 @@ body[data-resizing='true'] {
 }
 .status .warn {
   color: var(--rust);
+  /* A pattern error message can run hundreds of characters (a mini parse
+     failure lists every token it expected). The slot shrinks and ellipsizes
+     instead of inflating the app's grid column, which pushed the harness
+     pane out of the window; the full text stays on the slot's title. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

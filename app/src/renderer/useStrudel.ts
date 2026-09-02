@@ -146,20 +146,53 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     setState((prev) => (prev.error === undefined ? prev : { started: prev.started }));
   }, []);
 
-  const toggle = useCallback(() => {
-    void editorRef.current?.toggle();
+  /** Land a failure in the status bar error surface. Upstream catches
+   * evaluation errors into its own state and reports them through
+   * onUpdateState; this is for the ones that try to escape that net. */
+  const report = useCallback((error: unknown) => {
+    const resolved = error instanceof Error ? error : new Error(String(error));
+    setState((prev) => (prev.error?.message === resolved.message ? prev : { started: prev.started, error: resolved }));
   }, []);
 
+  /** Playback evaluation is asynchronous: a rejected promise here would die
+   * as an unhandled rejection nobody sees. Every pattern failure must land
+   * ONLY in the status bar error surface, so the wrappers catch what upstream
+   * let through and report it like any other pattern error. */
+  const toggle = useCallback(() => {
+    void editorRef.current?.toggle().catch(report);
+  }, [report]);
+
   const evaluate = useCallback(() => {
-    void editorRef.current?.evaluate();
-  }, []);
+    void editorRef.current?.evaluate().catch(report);
+  }, [report]);
 
   /** Re-run the pattern in place, so a change lands on the next cycle. */
   const reevaluate = useCallback(() => {
     if (state.started) {
-      void editorRef.current?.evaluate();
+      void editorRef.current?.evaluate().catch(report);
     }
-  }, [state.started]);
+  }, [report, state.started]);
+
+  // Playback scheduling runs on timers this hook does not own. A pattern that
+  // throws while being queried or triggered (a cycle after it evaluated fine)
+  // is caught by the upstream scheduler, which logs it to the strudel.log
+  // DOM event and moves on — so playback survives, but on a desktop shell the
+  // failure would otherwise be invisible. Surface those errors here, deduped:
+  // a broken pattern re-fires the same message on every cycle.
+  useEffect(() => {
+    const onLog = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string; type?: string }>).detail;
+      if (!detail || detail.type === 'error') {
+        return; // Eval failures already surface through the editor's own state.
+      }
+      const match = /^\[(cyclist|getTrigger)\] error: (.+)$/.exec(detail.message ?? '');
+      if (match) {
+        report(new Error(match[2]!));
+      }
+    };
+    document.addEventListener('strudel.log', onLog);
+    return () => document.removeEventListener('strudel.log', onLog);
+  }, [report]);
 
   /** Taking the tempo by hand, which then survives re-evaluation. */
   const changeCps = useCallback((next: number) => {
