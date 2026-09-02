@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   readlink,
+  rm,
   rmdir,
   symlink,
   unlink,
@@ -16,10 +17,8 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 export const DEFAULT_SESSIONS_ROOT_NAME = 'strudel++';
 export const LEGACY_MIGRATION_DIRECTORY = 'legacy-migration';
-
-export function isLegacyMigrationDirectory(name: string): boolean {
-  return name === LEGACY_MIGRATION_DIRECTORY || /^legacy-migration \(\d+\)$/.test(name);
-}
+export const LEGACY_MIGRATION_MARKER = '.strudel-legacy-archive';
+export const LEGACY_MIGRATION_MARKER_CONTENT = 'strudel++ legacy migration archive\n';
 
 export function defaultSessionsRoot(home: string = homedir()): string {
   return join(home, 'Music', DEFAULT_SESSIONS_ROOT_NAME);
@@ -65,6 +64,7 @@ export async function resolveSessionsRoot(options: SessionsRootOptions = {}): Pr
 
 type EntryKind = 'missing' | 'directory' | 'file' | 'symlink' | 'other';
 type MoveResult = 'moved' | 'collision' | 'missing';
+type CopyResult = 'copied' | 'changed' | 'missing';
 
 type MigrationConflict = {
   source: string;
@@ -111,11 +111,7 @@ async function migrateLegacyRoots(root: string, legacyRoots: readonly string[]):
 
   const existingLegacyRoots: string[] = [];
   for (const legacyRoot of legacyRoots) {
-    if (
-      legacyRoot === root ||
-      root.startsWith(`${legacyRoot}${sep}`) ||
-      legacyRoot.startsWith(`${root}${sep}`)
-    ) {
+    if (legacyRoot === root || root.startsWith(`${legacyRoot}${sep}`) || legacyRoot.startsWith(`${root}${sep}`)) {
       throw new Error(`Sessions roots cannot contain one another: ${root} and ${legacyRoot}`);
     }
     const legacyKind = await entryKind(legacyRoot);
@@ -137,25 +133,81 @@ async function migrateLegacyRoots(root: string, legacyRoots: readonly string[]):
 
   for (const legacyRoot of existingLegacyRoots) {
     const conflicts: MigrationConflict[] = [];
-    await migrateLegacyRoot(root, legacyRoot, conflicts);
+    let remaining: string[];
+    try {
+      remaining = await migrateLegacyRoot(root, legacyRoot, conflicts);
+    } catch (error: unknown) {
+      await writeMigrationReport(root, conflicts);
+      const recovery = await writeIncompleteMigrationReport(
+        root,
+        legacyRoot,
+        await remainingLegacyEntries(legacyRoot),
+        error,
+      );
+      throw new Error(`Legacy sessions root migration incomplete. See ${relative(root, recovery)}`);
+    }
     await writeMigrationReport(root, conflicts);
+    if (remaining.length > 0) {
+      const recovery = await writeIncompleteMigrationReport(root, legacyRoot, remaining);
+      throw new Error(`Legacy sessions root migration incomplete. See ${relative(root, recovery)}`);
+    }
   }
 }
 
-async function migrateLegacyRoot(root: string, legacyRoot: string, conflicts: MigrationConflict[]): Promise<void> {
-  let entries: Dirent[];
+async function migrateLegacyRoot(root: string, legacyRoot: string, conflicts: MigrationConflict[]): Promise<string[]> {
+  const context: MigrationContext = { root, legacyRoot, conflicts };
+  for (let pass = 0; pass < 2; pass += 1) {
+    const entries = await readDirectoryEntries(legacyRoot);
+    if (entries.length === 0) {
+      try {
+        await rmdir(legacyRoot);
+        return [];
+      } catch (error: unknown) {
+        if (hasCode(error, 'ENOENT')) {
+          return [];
+        }
+        if (!hasCode(error, 'ENOTEMPTY') && !hasCode(error, 'EEXIST')) {
+          throw error;
+        }
+      }
+      continue;
+    }
+
+    await migrateLegacyEntries(context, entries);
+    try {
+      await rmdir(legacyRoot);
+      return [];
+    } catch (error: unknown) {
+      if (hasCode(error, 'ENOENT')) {
+        return [];
+      }
+      if (!hasCode(error, 'ENOTEMPTY') && !hasCode(error, 'EEXIST')) {
+        throw error;
+      }
+    }
+  }
+
+  return (await readDirectoryEntries(legacyRoot)).map((entry) => entry.name);
+}
+
+async function readDirectoryEntries(path: string): Promise<Dirent[]> {
   try {
-    entries = await readdir(legacyRoot, { withFileTypes: true });
+    return await readdir(path, { withFileTypes: true });
   } catch (error: unknown) {
     if (hasCode(error, 'ENOENT')) {
-      return;
+      return [];
     }
     throw error;
   }
+}
 
-  const context: MigrationContext = { root, legacyRoot, conflicts };
+async function remainingLegacyEntries(legacyRoot: string): Promise<string[]> {
+  return (await readDirectoryEntries(legacyRoot)).map((entry) => entry.name);
+}
+
+async function migrateLegacyEntries(context: MigrationContext, entries: readonly Dirent[]): Promise<void> {
   for (const entry of entries) {
-    const source = join(legacyRoot, entry.name);
+    const source = join(context.legacyRoot, entry.name);
     if ((await entryKind(source)) === 'missing') {
       continue;
     }
@@ -165,7 +217,7 @@ async function migrateLegacyRoot(root: string, legacyRoot: string, conflicts: Mi
       continue;
     }
 
-    const destination = join(root, entry.name);
+    const destination = join(context.root, entry.name);
     const result = await moveEntry(source, destination);
     if (result === 'moved' || result === 'missing') {
       continue;
@@ -177,14 +229,6 @@ async function migrateLegacyRoot(root: string, legacyRoot: string, conflicts: Mi
     }
 
     await archiveConflict(context, source, entry.name);
-  }
-
-  try {
-    await rmdir(legacyRoot);
-  } catch (error: unknown) {
-    if (!hasCode(error, 'ENOENT') && !hasCode(error, 'ENOTEMPTY') && !hasCode(error, 'EEXIST')) {
-      throw error;
-    }
   }
 }
 
@@ -278,7 +322,11 @@ async function mergeDirectory(
   }
 }
 
-async function moveSessionWithUniqueName(context: MigrationContext, source: string, originalName: string): Promise<void> {
+async function moveSessionWithUniqueName(
+  context: MigrationContext,
+  source: string,
+  originalName: string,
+): Promise<void> {
   let attempt = 1;
   while (true) {
     const suffix = attempt === 1 ? 'legacy' : `legacy ${attempt}`;
@@ -298,52 +346,7 @@ async function moveEntry(source: string, destination: string): Promise<MoveResul
   }
 
   if (sourceKind === 'directory') {
-    try {
-      await mkdir(destination);
-    } catch (error: unknown) {
-      if (hasCode(error, 'EEXIST')) {
-        return 'collision';
-      }
-      throw error;
-    }
-    let entries: Dirent[];
-    try {
-      entries = await readdir(source, { withFileTypes: true });
-    } catch (error: unknown) {
-      if (hasCode(error, 'ENOENT')) {
-        try {
-          await rmdir(destination);
-          return 'missing';
-        } catch (cleanupError: unknown) {
-          if (hasCode(cleanupError, 'ENOENT')) {
-            return 'missing';
-          }
-          if (hasCode(cleanupError, 'ENOTEMPTY') || hasCode(cleanupError, 'EEXIST')) {
-            return 'collision';
-          }
-          throw cleanupError;
-        }
-      }
-      throw error;
-    }
-    for (const entry of entries) {
-      const result = await moveEntry(join(source, entry.name), join(destination, entry.name));
-      if (result === 'collision') {
-        return 'collision';
-      }
-    }
-    try {
-      await rmdir(source);
-    } catch (error: unknown) {
-      if (hasCode(error, 'ENOENT')) {
-        return 'moved';
-      }
-      if (hasCode(error, 'ENOTEMPTY') || hasCode(error, 'EEXIST')) {
-        return 'collision';
-      }
-      throw error;
-    }
-    return 'moved';
+    return moveDirectoryEntry(source, destination);
   }
 
   if (sourceKind === 'file') {
@@ -393,7 +396,180 @@ async function moveEntry(source: string, destination: string): Promise<MoveResul
   throw new Error(`Cannot migrate unsupported filesystem entry: ${source}`);
 }
 
-async function entriesEqual(source: string, destination: string, sourceKind: EntryKind, destinationKind: EntryKind): Promise<boolean> {
+async function moveDirectoryEntry(source: string, destination: string): Promise<MoveResult> {
+  if ((await entryKind(destination)) !== 'missing') {
+    return 'collision';
+  }
+  const stage = await createStageDirectory(destination);
+  try {
+    const copied = await copyDirectoryContents(source, stage);
+    if (copied === 'missing') {
+      return 'missing';
+    }
+    if (copied === 'changed') {
+      return 'collision';
+    }
+    if ((await entryKind(source)) !== 'directory') {
+      return 'missing';
+    }
+
+    const published = await publishStage(stage, destination);
+    if (published === 'collision') {
+      return 'collision';
+    }
+    if (await entriesEqual(source, destination, 'directory', 'directory')) {
+      await removeTree(source);
+      return 'moved';
+    }
+    return 'collision';
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
+}
+
+async function createStageDirectory(destination: string): Promise<string> {
+  const parent = dirname(destination);
+  const baseName = `.${basename(destination)}.migration-stage`;
+  let attempt = 1;
+  while (true) {
+    const name = attempt === 1 ? baseName : `${baseName}-${attempt}`;
+    const stage = join(parent, name);
+    try {
+      await mkdir(stage);
+      return stage;
+    } catch (error: unknown) {
+      if (hasCode(error, 'EEXIST')) {
+        attempt += 1;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function copyDirectoryContents(source: string, destination: string): Promise<CopyResult> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(source, { withFileTypes: true });
+  } catch (error: unknown) {
+    if (hasCode(error, 'ENOENT')) {
+      return 'missing';
+    }
+    throw error;
+  }
+  for (const entry of entries) {
+    const result = await copyEntry(join(source, entry.name), join(destination, entry.name));
+    if (result === 'changed') {
+      return 'changed';
+    }
+  }
+  return 'copied';
+}
+
+async function copyEntry(source: string, destination: string): Promise<CopyResult> {
+  const sourceKind = await entryKind(source);
+  if (sourceKind === 'missing') {
+    return 'missing';
+  }
+  if (sourceKind === 'directory') {
+    try {
+      await mkdir(destination);
+    } catch (error: unknown) {
+      if (hasCode(error, 'EEXIST')) {
+        return 'changed';
+      }
+      throw error;
+    }
+    return copyDirectoryContents(source, destination);
+  }
+  if (sourceKind === 'file') {
+    try {
+      await copyFile(source, destination, constants.COPYFILE_EXCL);
+    } catch (error: unknown) {
+      if (hasCode(error, 'EEXIST')) {
+        return 'changed';
+      }
+      throw error;
+    }
+    return (await filesEqual(source, destination)) ? 'copied' : 'changed';
+  }
+  if (sourceKind === 'symlink') {
+    const target = await readlink(source);
+    try {
+      await symlink(target, destination);
+      return 'copied';
+    } catch (error: unknown) {
+      if (hasCode(error, 'EEXIST')) {
+        return 'changed';
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Cannot migrate unsupported filesystem entry: ${source}`);
+}
+
+async function publishStage(stage: string, destination: string): Promise<MoveResult> {
+  try {
+    await mkdir(destination);
+  } catch (error: unknown) {
+    if (hasCode(error, 'EEXIST')) {
+      return 'collision';
+    }
+    throw error;
+  }
+
+  const published: string[] = [];
+  let collision = false;
+  try {
+    const entries = await readdir(stage, { withFileTypes: true });
+    for (const entry of entries) {
+      const result = await moveEntry(join(stage, entry.name), join(destination, entry.name));
+      if (result === 'collision') {
+        collision = true;
+        break;
+      }
+      if (result === 'moved') {
+        published.push(entry.name);
+      }
+    }
+  } catch (error: unknown) {
+    await rollbackPublished(destination, stage, published);
+    throw error;
+  }
+
+  if (collision) {
+    await rollbackPublished(destination, stage, published);
+    return 'collision';
+  }
+  await rmdir(stage);
+  return 'moved';
+}
+
+async function rollbackPublished(destination: string, stage: string, published: readonly string[]): Promise<void> {
+  for (const name of [...published].reverse()) {
+    const result = await moveEntry(join(destination, name), join(stage, name));
+    if (result === 'collision') {
+      throw new Error(`Could not roll back staged migration entry: ${join(destination, name)}`);
+    }
+  }
+  try {
+    await rmdir(destination);
+  } catch (error: unknown) {
+    if (!hasCode(error, 'ENOENT') && !hasCode(error, 'ENOTEMPTY') && !hasCode(error, 'EEXIST')) {
+      throw error;
+    }
+  }
+}
+
+async function entriesEqual(
+  source: string,
+  destination: string,
+  sourceKind: EntryKind,
+  destinationKind: EntryKind,
+): Promise<boolean> {
+  if (sourceKind === 'directory' && destinationKind === 'directory') {
+    return directoriesEqual(source, destination);
+  }
   if (sourceKind === 'file' && destinationKind === 'file') {
     return filesEqual(source, destination);
   }
@@ -403,9 +579,48 @@ async function entriesEqual(source: string, destination: string, sourceKind: Ent
   return false;
 }
 
+async function directoriesEqual(source: string, destination: string): Promise<boolean> {
+  let sourceEntries: Dirent[];
+  let destinationEntries: Dirent[];
+  try {
+    [sourceEntries, destinationEntries] = await Promise.all([
+      readdir(source, { withFileTypes: true }),
+      readdir(destination, { withFileTypes: true }),
+    ]);
+  } catch (error: unknown) {
+    if (hasCode(error, 'ENOENT')) {
+      return false;
+    }
+    throw error;
+  }
+  if (sourceEntries.length !== destinationEntries.length) {
+    return false;
+  }
+  const destinationNames = new Set(destinationEntries.map((entry) => entry.name));
+  for (const entry of sourceEntries) {
+    if (!destinationNames.has(entry.name)) {
+      return false;
+    }
+    const childSource = join(source, entry.name);
+    const childDestination = join(destination, entry.name);
+    const [sourceKind, destinationKind] = await Promise.all([entryKind(childSource), entryKind(childDestination)]);
+    if (!(await entriesEqual(childSource, childDestination, sourceKind, destinationKind))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function filesEqual(source: string, destination: string): Promise<boolean> {
-  const [sourceContent, destinationContent] = await Promise.all([readFile(source), readFile(destination)]);
-  return sourceContent.equals(destinationContent);
+  try {
+    const [sourceContent, destinationContent] = await Promise.all([readFile(source), readFile(destination)]);
+    return sourceContent.equals(destinationContent);
+  } catch (error: unknown) {
+    if (hasCode(error, 'ENOENT')) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function removeSource(source: string, kind: EntryKind): Promise<void> {
@@ -414,6 +629,26 @@ async function removeSource(source: string, kind: EntryKind): Promise<void> {
     return;
   }
   await unlink(source);
+}
+
+async function removeTree(path: string): Promise<void> {
+  const kind = await entryKind(path);
+  if (kind === 'missing') {
+    return;
+  }
+  if (kind === 'directory') {
+    const entries = await readdir(path, { withFileTypes: true });
+    for (const entry of entries) {
+      await removeTree(join(path, entry.name));
+    }
+    await rmdir(path);
+    return;
+  }
+  if (kind === 'file' || kind === 'symlink') {
+    await unlink(path);
+    return;
+  }
+  throw new Error(`Cannot remove unsupported filesystem entry: ${path}`);
 }
 
 async function archiveConflict(context: MigrationContext, source: string, relativePath: string): Promise<void> {
@@ -452,6 +687,15 @@ async function ensureArchiveRoot(context: MigrationContext): Promise<string> {
     const candidate = join(context.root, name);
     try {
       await mkdir(candidate);
+      try {
+        await writeFile(join(candidate, LEGACY_MIGRATION_MARKER), LEGACY_MIGRATION_MARKER_CONTENT, {
+          encoding: 'utf8',
+          flag: 'wx',
+        });
+      } catch (error: unknown) {
+        await rm(candidate, { recursive: true, force: true });
+        throw error;
+      }
       archiveBase = candidate;
       break;
     } catch (error: unknown) {
@@ -508,4 +752,45 @@ async function writeMigrationReport(root: string, conflicts: readonly MigrationC
       throw error;
     }
   }
+}
+
+async function writeIncompleteMigrationReport(
+  root: string,
+  legacyRoot: string,
+  remaining: readonly string[],
+  reason?: unknown,
+): Promise<string> {
+  const details =
+    remaining.length > 0
+      ? remaining.map((name) => `- \`${join(legacyRoot, name)}\``)
+      : ['- Inspect the legacy root directly.'];
+  const report = [
+    '# Legacy migration incomplete',
+    '',
+    `The app could not finish migrating \`${legacyRoot}\`. The legacy root remains the source of truth for these entries:`,
+    '',
+    ...details,
+    ...(reason ? ['', `Migration error: ${errorMessage(reason)}`] : []),
+    '',
+  ].join('\n');
+
+  let attempt = 1;
+  while (true) {
+    const name = attempt === 1 ? 'LEGACY-MIGRATION-INCOMPLETE.md' : `LEGACY-MIGRATION-INCOMPLETE (${attempt}).md`;
+    const path = join(root, name);
+    try {
+      await writeFile(path, report, { encoding: 'utf8', flag: 'wx' });
+      return path;
+    } catch (error: unknown) {
+      if (hasCode(error, 'EEXIST')) {
+        attempt += 1;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

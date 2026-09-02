@@ -1,15 +1,20 @@
+import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   defaultSessionsRoot,
   LEGACY_MIGRATION_DIRECTORY,
+  LEGACY_MIGRATION_MARKER,
+  LEGACY_MIGRATION_MARKER_CONTENT,
   legacySessionsRoots,
   resolveSessionsRoot,
 } from './sessionsRoot';
 
 let home: string;
+const execFile = promisify(execFileCallback);
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'sessions-root-'));
@@ -123,11 +128,41 @@ describe('legacy session migration', () => {
     await expect(
       readFile(join(root, LEGACY_MIGRATION_DIRECTORY, 'Strudel', '.claude', 'settings.json'), 'utf8'),
     ).resolves.toBe('legacy settings');
+    await expect(readFile(join(root, LEGACY_MIGRATION_DIRECTORY, LEGACY_MIGRATION_MARKER), 'utf8')).resolves.toBe(
+      LEGACY_MIGRATION_MARKER_CONTENT,
+    );
     await expect(readFile(join(root, 'LEGACY-MIGRATION.md'), 'utf8')).resolves.toMatch(/Strudel\/AGENTS\.md/);
     await expect(readFile(join(root, 'LEGACY-MIGRATION.md'), 'utf8')).resolves.toMatch(
       /Strudel\/\.claude\/settings\.json/,
     );
     await expect(stat(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('surfaces a legacy root that still contains an unsupported entry', async () => {
+    const legacy = join(home, 'Music', 'Strudel');
+    const fifo = join(legacy, 'legacy-output');
+    await mkdir(legacy, { recursive: true });
+    await execFile('mkfifo', [fifo]);
+
+    await expect(resolveSessionsRoot({ home })).rejects.toThrow(/migration incomplete/i);
+    await expect(stat(fifo)).resolves.toBeTruthy();
+    await expect(readFile(join(defaultSessionsRoot(home), 'LEGACY-MIGRATION-INCOMPLETE.md'), 'utf8')).resolves.toMatch(
+      /legacy-output/,
+    );
+  });
+
+  it('does not publish a partial session when directory staging fails', async () => {
+    const legacy = join(home, 'Music', 'Strudel');
+    const session = join(legacy, 'partial-set');
+    const fifo = join(session, 'legacy-output');
+    await mkdir(session, { recursive: true });
+    await writeFile(join(session, 'intro.js'), 'intro');
+    await execFile('mkfifo', [fifo]);
+
+    await expect(resolveSessionsRoot({ home })).rejects.toThrow(/migration incomplete/i);
+    await expect(stat(join(defaultSessionsRoot(home), 'partial-set'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(session, 'intro.js'))).resolves.toBeTruthy();
+    await expect(stat(fifo)).resolves.toBeTruthy();
   });
 
   it('is idempotent across repeated startup resolution', async () => {

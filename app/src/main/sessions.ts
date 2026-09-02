@@ -1,11 +1,12 @@
 import { access, lstat, mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { BEAT_EXTENSION } from '../shared/beatName';
 import { isBeatSortMode, type BeatSortMode } from '../shared/beatSorting';
 import { isDockState, type DockState } from '../shared/dockState';
 import { DEFAULT_SESSION_BEATS, DEFAULT_SESSION_NAME, DEFAULT_SESSION_STATE } from './defaultSession';
 import { seedHarnessContent } from './harnessContent';
-import { isLegacyMigrationDirectory } from './sessionsRoot';
+import { LEGACY_MIGRATION_MARKER, LEGACY_MIGRATION_MARKER_CONTENT } from './sessionsRoot';
 
 export type Session = { name: string; beats: number; usedAt: number };
 export type SessionState = {
@@ -88,8 +89,7 @@ async function linkSharedPath(root: string, sessionPath: string, name: string): 
  */
 async function seedDefaultSession(base: string): Promise<void> {
   try {
-    const entries = await readdir(base, { withFileTypes: true });
-    if (entries.some(isSessionEntry)) {
+    if ((await sessionEntries(base)).length > 0) {
       return;
     }
     const full = join(base, DEFAULT_SESSION_NAME);
@@ -148,28 +148,23 @@ export function createSessionStore(root: string): SessionStore {
       // and — only when it has no sessions of its own yet — the example one.
       await seedHarnessContent(base);
       await seedDefaultSession(base);
-      const entries = await readdir(base, { withFileTypes: true });
+      const entries = await sessionEntries(base);
       const sessions = await Promise.all(
-        entries
-          .filter(isSessionEntry)
-          .map(async (entry) => {
-            const full = join(base, entry.name);
-            const files = await readdir(full);
-            return {
-              name: entry.name,
-              beats: files.filter((file) => file.endsWith(BEAT_EXTENSION)).length,
-              usedAt: (await read(full)).usedAt ?? 0,
-            };
-          }),
+        entries.map(async (entry) => {
+          const full = join(base, entry.name);
+          const files = await readdir(full);
+          return {
+            name: entry.name,
+            beats: files.filter((file) => file.endsWith(BEAT_EXTENSION)).length,
+            usedAt: (await read(full)).usedAt ?? 0,
+          };
+        }),
       );
       return sessions.sort((a, b) => b.usedAt - a.usedAt);
     },
 
     async create(name) {
       const full = locate(name);
-      if (isLegacyMigrationDirectory(name)) {
-        throw new Error(`${name} is reserved for migration archives.`);
-      }
       if (await exists(full)) {
         throw new Error(`${name} already exists.`);
       }
@@ -208,8 +203,31 @@ export function createSessionStore(root: string): SessionStore {
   };
 }
 
-function isSessionEntry(entry: { isDirectory(): boolean; name: string }): boolean {
-  return entry.isDirectory() && !entry.name.startsWith('.') && !isLegacyMigrationDirectory(entry.name);
+async function sessionEntries(base: string): Promise<Dirent[]> {
+  const entries = await readdir(base, { withFileTypes: true });
+  const sessions: Dirent[] = [];
+  for (const entry of entries) {
+    if (await isSessionEntry(base, entry)) {
+      sessions.push(entry);
+    }
+  }
+  return sessions;
+}
+
+async function isSessionEntry(base: string, entry: Dirent): Promise<boolean> {
+  if (!entry.isDirectory() || entry.name.startsWith('.')) {
+    return false;
+  }
+  try {
+    return (await readFile(join(base, entry.name, LEGACY_MIGRATION_MARKER), 'utf8')) === LEGACY_MIGRATION_MARKER_CONTENT
+      ? false
+      : true;
+  } catch (error: unknown) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return true;
+    }
+    throw error;
+  }
 }
 
 async function read(sessionPath: string): Promise<StoredState> {
