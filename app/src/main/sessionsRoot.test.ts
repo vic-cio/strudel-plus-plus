@@ -2,7 +2,12 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { defaultSessionsRoot, legacySessionsRoots, resolveSessionsRoot } from './sessionsRoot';
+import {
+  defaultSessionsRoot,
+  LEGACY_MIGRATION_DIRECTORY,
+  legacySessionsRoots,
+  resolveSessionsRoot,
+} from './sessionsRoot';
 
 let home: string;
 
@@ -87,6 +92,42 @@ describe('legacy session migration', () => {
 
     await expect(readFile(join(root, 'set', 'current.js'), 'utf8')).resolves.toBe('current');
     await expect(readFile(join(root, 'set (legacy)', 'old.js'), 'utf8')).resolves.toBe('old');
+  });
+
+  it('merges shared harness content and archives conflicts in the canonical root', async () => {
+    const root = defaultSessionsRoot(home);
+    const legacy = join(home, 'Music', 'Strudel');
+    await mkdir(join(root, '.claude'), { recursive: true });
+    await writeFile(join(root, 'AGENTS.md'), 'canonical agents');
+    await writeFile(join(root, '.claude', 'settings.json'), 'canonical settings');
+    await mkdir(join(legacy, '.claude', 'skills', 'legacy-skill'), { recursive: true });
+    await writeFile(join(legacy, 'AGENTS.md'), 'legacy agents');
+    await writeFile(join(legacy, '.claude', 'settings.json'), 'legacy settings');
+    await writeFile(join(legacy, '.claude', 'skills', 'legacy-skill', 'SKILL.md'), 'legacy skill');
+    await mkdir(join(legacy, '.agents', 'skills', 'legacy-agent'), { recursive: true });
+    await writeFile(join(legacy, '.agents', 'skills', 'legacy-agent', 'SKILL.md'), 'legacy agent');
+
+    await resolveSessionsRoot({ home });
+
+    await expect(readFile(join(root, 'AGENTS.md'), 'utf8')).resolves.toBe('canonical agents');
+    await expect(readFile(join(root, '.claude', 'settings.json'), 'utf8')).resolves.toBe('canonical settings');
+    await expect(readFile(join(root, '.claude', 'skills', 'legacy-skill', 'SKILL.md'), 'utf8')).resolves.toBe(
+      'legacy skill',
+    );
+    await expect(readFile(join(root, '.agents', 'skills', 'legacy-agent', 'SKILL.md'), 'utf8')).resolves.toBe(
+      'legacy agent',
+    );
+    await expect(readFile(join(root, LEGACY_MIGRATION_DIRECTORY, 'Strudel', 'AGENTS.md'), 'utf8')).resolves.toBe(
+      'legacy agents',
+    );
+    await expect(
+      readFile(join(root, LEGACY_MIGRATION_DIRECTORY, 'Strudel', '.claude', 'settings.json'), 'utf8'),
+    ).resolves.toBe('legacy settings');
+    await expect(readFile(join(root, 'LEGACY-MIGRATION.md'), 'utf8')).resolves.toMatch(/Strudel\/AGENTS\.md/);
+    await expect(readFile(join(root, 'LEGACY-MIGRATION.md'), 'utf8')).resolves.toMatch(
+      /Strudel\/\.claude\/settings\.json/,
+    );
+    await expect(stat(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('is idempotent across repeated startup resolution', async () => {

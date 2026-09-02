@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSessionStore } from './sessions';
+import { LEGACY_MIGRATION_DIRECTORY } from './sessionsRoot';
 
 let root: string;
 
@@ -25,6 +26,13 @@ describe('createSessionStore', () => {
     await mkdir(join(root, 'live-set'));
     await mkdir(join(root, '.claude'));
     await writeFile(join(root, 'AGENTS.md'), '');
+    const sessions = await createSessionStore(root).list();
+    expect(sessions.map((session) => session.name)).toEqual(['live-set']);
+  });
+
+  it('does not list the migration archive as a session', async () => {
+    await mkdir(join(root, 'live-set'));
+    await mkdir(join(root, LEGACY_MIGRATION_DIRECTORY, 'Strudel', 'old-set'), { recursive: true });
     const sessions = await createSessionStore(root).list();
     expect(sessions.map((session) => session.name)).toEqual(['live-set']);
   });

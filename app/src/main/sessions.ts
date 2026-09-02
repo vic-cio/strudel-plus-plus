@@ -5,6 +5,7 @@ import { isBeatSortMode, type BeatSortMode } from '../shared/beatSorting';
 import { isDockState, type DockState } from '../shared/dockState';
 import { DEFAULT_SESSION_BEATS, DEFAULT_SESSION_NAME, DEFAULT_SESSION_STATE } from './defaultSession';
 import { seedHarnessContent } from './harnessContent';
+import { isLegacyMigrationDirectory } from './sessionsRoot';
 
 export type Session = { name: string; beats: number; usedAt: number };
 export type SessionState = {
@@ -88,7 +89,7 @@ async function linkSharedPath(root: string, sessionPath: string, name: string): 
 async function seedDefaultSession(base: string): Promise<void> {
   try {
     const entries = await readdir(base, { withFileTypes: true });
-    if (entries.some((entry) => entry.isDirectory() && !entry.name.startsWith('.'))) {
+    if (entries.some(isSessionEntry)) {
       return;
     }
     const full = join(base, DEFAULT_SESSION_NAME);
@@ -150,7 +151,7 @@ export function createSessionStore(root: string): SessionStore {
       const entries = await readdir(base, { withFileTypes: true });
       const sessions = await Promise.all(
         entries
-          .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+          .filter(isSessionEntry)
           .map(async (entry) => {
             const full = join(base, entry.name);
             const files = await readdir(full);
@@ -166,6 +167,9 @@ export function createSessionStore(root: string): SessionStore {
 
     async create(name) {
       const full = locate(name);
+      if (isLegacyMigrationDirectory(name)) {
+        throw new Error(`${name} is reserved for migration archives.`);
+      }
       if (await exists(full)) {
         throw new Error(`${name} already exists.`);
       }
@@ -202,6 +206,10 @@ export function createSessionStore(root: string): SessionStore {
       await write(full, await pruneStaleState(full, merged));
     },
   };
+}
+
+function isSessionEntry(entry: { isDirectory(): boolean; name: string }): boolean {
+  return entry.isDirectory() && !entry.name.startsWith('.') && !isLegacyMigrationDirectory(entry.name);
 }
 
 async function read(sessionPath: string): Promise<StoredState> {
