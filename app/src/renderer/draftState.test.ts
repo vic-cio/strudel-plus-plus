@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  acceptDisk,
   activateBeat,
   dirtyBeats,
   hasDirtyDrafts,
+  markConflict,
   recordDraft,
   renameBeat,
   saveBeat,
@@ -33,6 +35,17 @@ describe('renderer beat draft state', () => {
     expect(dirtyBeats(saved, 'session')).toEqual(new Set(['one.js']));
     expect(activateBeat(saved, 'session', 'one.js', 'disk one').content).toBe('draft one');
     expect(activateBeat(saved, 'session', 'two.js', 'draft two').content).toBe('draft two');
+  });
+
+  it('accepts disk content by discarding the conflicting draft', () => {
+    let state = activateBeat(empty, 'session', 'one.js', 'disk A').state;
+    state = recordDraft(state, 'session', 'one.js', 'draft B');
+    state = markConflict(state, 'session', 'one.js', 'disk C');
+
+    const accepted = acceptDisk(state, 'session', 'one.js', 'disk C');
+
+    expect(dirtyBeats(accepted, 'session')).toEqual(new Set());
+    expect(activateBeat(accepted, 'session', 'one.js', 'disk C').content).toBe('disk C');
   });
 
   it('keeps dirty state across session boundaries and reports any dirty session', () => {

@@ -126,7 +126,11 @@ export function saveBeat(state: DraftState, session: string, beat: string, conte
 
 /** Explicitly accept disk content, discarding only that beat's draft. */
 export function acceptDisk(state: DraftState, session: string, beat: string, content: string): DraftState {
-  return saveBeat(state, session, beat, content);
+  return updateSession(state, session, (current) => ({
+    drafts: removeKey(current.drafts, beat),
+    saved: setKey(current.saved, beat, content),
+    conflicts: removeKey(current.conflicts, beat),
+  }));
 }
 
 /** Record an inactive or active conflict without changing the live draft. */
