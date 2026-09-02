@@ -49,6 +49,8 @@ const { mirrors, FakeMirror } = vi.hoisted(() => {
     }
 
     clear(): void {}
+
+    reconfigureExtension(): void {}
   }
 
   return { mirrors, FakeMirror };
@@ -201,5 +203,21 @@ describe('useStrudel', () => {
     logPlaybackError('[eval] code updated');
     logPlaybackError('skip query: too late');
     expect(screen.getByTestId('repl-error').textContent).toBe('');
+  });
+
+  it('turns on the upstream tab-indentation extension when it mounts the editor', () => {
+    vi.useRealTimers();
+    const reconfigure = vi.spyOn(FakeMirror.prototype, 'reconfigureExtension');
+    try {
+      render(<Harness showEditor />);
+
+      expect(mirrors).toHaveLength(1);
+      // 'isTabIndentationEnabled' is upstream's key for keymap.of([indentWithTab]),
+      // the binding that inserts indentation and swallows the Tab keydown so the
+      // browser cannot move focus to the next panel. Any other key silently no-ops.
+      expect(reconfigure).toHaveBeenCalledWith('isTabIndentationEnabled', true);
+    } finally {
+      reconfigure.mockRestore();
+    }
   });
 });
