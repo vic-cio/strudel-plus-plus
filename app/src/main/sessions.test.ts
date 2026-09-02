@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSessionStore } from './sessions';
-import { STARTER_BEAT } from '../shared/starterBeat';
+
+const APPROVED_STARTER_BEAT = `// a new beat
+
+stack(
+  s("bd*2, ~ sd"),
+  s("hh*8").gain(0.4),
+)
+`;
 
 let root: string;
 
@@ -53,7 +60,7 @@ describe('createSessionStore', () => {
     await store.create('fresh');
     const [session] = await store.list();
     expect(session?.beats).toBe(1);
-    await expect(readFile(join(root, 'fresh', 'untitled.js'), 'utf8')).resolves.toBe(STARTER_BEAT);
+    await expect(readFile(join(root, 'fresh', 'untitled.js'), 'utf8')).resolves.toBe(APPROVED_STARTER_BEAT);
   });
 
   it('removes a session through the store boundary', async () => {

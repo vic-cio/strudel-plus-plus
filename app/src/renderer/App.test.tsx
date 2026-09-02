@@ -311,6 +311,40 @@ describe('App session state', () => {
     await waitFor(() => expect(desktop.beats.remove).toHaveBeenCalledWith('drums.js'));
     expect(persistedBeats().at(-1)).toBe('we begin.js');
   });
+
+  it('moves away if an inactive row becomes open while it is being deleted', async () => {
+    const user = userEvent.setup();
+    let listedBeats = [
+      { name: '808ing.js', modifiedAt: 1 },
+      { name: 'we begin.js', modifiedAt: 2 },
+    ];
+    desktop.beats.listInfo.mockImplementation(async () => listedBeats);
+    let removalStarted!: () => void;
+    let releaseRemoval!: () => void;
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    desktop.beats.remove.mockImplementationOnce(async () => {
+      removalStarted();
+      await released;
+      listedBeats = [{ name: 'we begin.js', modifiedAt: 2 }];
+    });
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
+    await user.click(screen.getByText('delete'));
+    await started;
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('808ing.js'));
+
+    releaseRemoval();
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
+  });
 });
 
 describe('App plugin dock', () => {

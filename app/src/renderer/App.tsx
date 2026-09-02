@@ -472,15 +472,18 @@ export function App() {
   const remove = useCallback(
     (name: string) =>
       attempt(async () => {
-        const wasOpen = name === openRef.current;
         await desktop.beats.remove(name);
         const list = await refresh();
-        if (!wasOpen) {
+        if (name !== openRef.current) {
           return;
         }
         const next = list[0]?.name;
         if (next) {
-          adopt(next, await desktop.beats.read(next));
+          const content = await desktop.beats.read(next);
+          if (name !== openRef.current) {
+            return;
+          }
+          adopt(next, content);
         } else {
           setOpen(undefined);
           openRef.current = undefined;

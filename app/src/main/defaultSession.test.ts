@@ -62,4 +62,17 @@ describe('seedDefaultSession', () => {
 
     await expect(store.list()).resolves.toEqual([]);
   });
+
+  it('keeps a legacy default deleted through the store boundary', async () => {
+    await mkdir(join(root, DEFAULT_SESSION_NAME));
+    await writeFile(join(root, DEFAULT_SESSION_NAME, 'we begin.js'), '// legacy');
+    const store = createSessionStore(root);
+
+    await expect(store.list()).resolves.toEqual([
+      expect.objectContaining({ name: DEFAULT_SESSION_NAME, beats: 1 }),
+    ]);
+    await store.remove(DEFAULT_SESSION_NAME);
+
+    await expect(store.list()).resolves.toEqual([]);
+  });
 });

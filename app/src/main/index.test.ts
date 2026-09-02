@@ -130,7 +130,7 @@ describe('openSession', () => {
     await sessionsOpenHandler({}, 'active-session');
 
     const sessionsRemoveHandler = handlers.get(CH.sessionsRemove)!;
-    expect(() => sessionsRemoveHandler({}, 'active-session')).toThrow(/active session/i);
+    await expect(sessionsRemoveHandler({}, 'active-session')).rejects.toThrow(/active session/i);
     expect(sessionsRemove).not.toHaveBeenCalled();
   });
 
@@ -142,5 +142,37 @@ describe('openSession', () => {
     await sessionsRemoveHandler({}, 'default-session');
 
     expect(sessionsRemove).toHaveBeenCalledWith('default-session');
+  });
+
+  it('serializes opening a session behind an in-flight deletion of that session', async () => {
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    sessionsRemove.mockClear();
+    sessionsTouch.mockClear();
+
+    let removalStarted!: () => void;
+    let releaseRemoval!: () => void;
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    sessionsRemove.mockImplementationOnce(async () => {
+      removalStarted();
+      await released;
+    });
+
+    const sessionsRemovePromise = handlers.get(CH.sessionsRemove)!({}, 'candidate-session');
+    await started;
+    const sessionsOpenPromise = sessionsOpenHandler({}, 'candidate-session');
+
+    await Promise.resolve();
+    expect(sessionsTouch).not.toHaveBeenCalled();
+
+    releaseRemoval();
+    await sessionsRemovePromise;
+    await sessionsOpenPromise;
+    expect(sessionsTouch).toHaveBeenCalledWith('candidate-session');
   });
 });

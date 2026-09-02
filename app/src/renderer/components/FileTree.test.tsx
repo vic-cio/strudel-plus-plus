@@ -145,6 +145,32 @@ describe('FileTree', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('keeps a bottom-row context menu inside the viewport', () => {
+    const viewportHeight = window.innerHeight;
+    const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 200 });
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get() {
+        return this.classList.contains('tree-menu') ? 140 : 0;
+      },
+    });
+
+    try {
+      setup();
+      fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }), { clientX: 20, clientY: 190 });
+
+      expect(screen.getByRole('menu')).toHaveProperty('style.top', '56px');
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: viewportHeight });
+      if (offsetHeight) {
+        Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeight);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'offsetHeight');
+      }
+    }
+  });
+
   it('offers the three beat sort modes with chronological order as the default', () => {
     setup();
 

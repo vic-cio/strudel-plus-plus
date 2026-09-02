@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   DEFAULT_BEAT_SORT,
   isBeatSortMode,
@@ -11,6 +11,10 @@ type Draft = { kind: 'create' } | { kind: 'rename'; from: string } | { kind: 'co
 type BeatInput = BeatSummary | string;
 type Menu = { name: string; left: number; top: number };
 type MenuAction = 'clone' | 'rename' | 'delete' | 'create';
+
+const MENU_WIDTH = 170;
+const MENU_ESTIMATED_HEIGHT = 120;
+const VIEWPORT_GUTTER = 4;
 
 type Props = {
   beats: BeatInput[];
@@ -81,9 +85,15 @@ export function FileTree({
   const openMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, name: string) => {
     event.preventDefault();
     event.stopPropagation();
-    const menuWidth = 170;
-    const left = Math.min(Math.max(event.clientX, 4), Math.max(4, window.innerWidth - menuWidth));
-    setMenu({ name, left, top: Math.max(event.clientY, 4) });
+    const left = Math.min(
+      Math.max(event.clientX, VIEWPORT_GUTTER),
+      Math.max(VIEWPORT_GUTTER, window.innerWidth - MENU_WIDTH),
+    );
+    const top = Math.min(
+      Math.max(event.clientY, VIEWPORT_GUTTER),
+      Math.max(VIEWPORT_GUTTER, window.innerHeight - MENU_ESTIMATED_HEIGHT - VIEWPORT_GUTTER),
+    );
+    setMenu({ name, left, top });
   }, []);
 
   const choose = useCallback(
@@ -138,6 +148,23 @@ export function FileTree({
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
     };
+  }, [menu]);
+
+  useLayoutEffect(() => {
+    if (!menu) {
+      return;
+    }
+    const height = menuRef.current?.offsetHeight ?? 0;
+    if (!height) {
+      return;
+    }
+    const top = Math.min(
+      menu.top,
+      Math.max(VIEWPORT_GUTTER, window.innerHeight - height - VIEWPORT_GUTTER),
+    );
+    if (top !== menu.top) {
+      setMenu({ ...menu, top });
+    }
   }, [menu]);
 
   useEffect(() => {

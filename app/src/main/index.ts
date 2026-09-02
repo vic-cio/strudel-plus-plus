@@ -113,6 +113,16 @@ async function main() {
   const osc = createOscSender();
   const midi = createMidiOut();
   let session: ReturnType<typeof ptyHost.start> | undefined;
+  let sessionTransitionTail: Promise<void> = Promise.resolve();
+
+  function queueSessionTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const current = sessionTransitionTail.then(operation, operation);
+    sessionTransitionTail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
+  }
 
   const window = new BrowserWindow({
     width: 1600,
@@ -257,17 +267,21 @@ async function main() {
   ipcMain.handle(CH.sessionsRoot, () => root);
   ipcMain.handle(CH.sessionsList, () => sessions.list());
   ipcMain.handle(CH.sessionsActive, () => active);
-  ipcMain.handle(CH.sessionsCreate, async (_event, name: string) => {
-    await sessions.create(name);
-    return openSession(name);
-  });
-  ipcMain.handle(CH.sessionsRemove, (_event, name: string) => {
-    if (name === active) {
-      throw new Error(`Cannot delete the active session: ${name}`);
-    }
-    return sessions.remove(name);
-  });
-  ipcMain.handle(CH.sessionsOpen, (_event, name: string) => openSession(name));
+  ipcMain.handle(CH.sessionsCreate, (_event, name: string) =>
+    queueSessionTransition(async () => {
+      await sessions.create(name);
+      return openSession(name);
+    }),
+  );
+  ipcMain.handle(CH.sessionsRemove, (_event, name: string) =>
+    queueSessionTransition(async () => {
+      if (name === active) {
+        throw new Error(`Cannot delete the active session: ${name}`);
+      }
+      return sessions.remove(name);
+    }),
+  );
+  ipcMain.handle(CH.sessionsOpen, (_event, name: string) => queueSessionTransition(() => openSession(name)));
   ipcMain.handle(CH.sessionsState, (_event, name: string) => sessions.getState(name));
   ipcMain.handle(CH.sessionsSetState, (_event, name: string, state: SessionState) => sessions.setState(name, state));
 

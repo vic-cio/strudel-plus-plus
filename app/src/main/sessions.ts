@@ -31,6 +31,7 @@ export type SessionStore = {
 
 const STATE_FILE = '.session.json';
 const DEFAULT_SESSION_SEED_MARKER = '.default-session-seeded';
+const DEFAULT_SESSION_DELETED_MARKER = '.default-session-deleted';
 const SHARED_FILES = ['AGENTS.md'] as const;
 const SHARED_FOLDERS = ['.claude', '.agents'] as const;
 
@@ -89,13 +90,13 @@ async function linkSharedPath(root: string, sessionPath: string, name: string): 
  * convenience, never a reason to refuse to open.
  */
 async function seedDefaultSession(base: string): Promise<void> {
-  try {
-    // The example is a first-launch convenience, not a session that should
-    // come back after the user deliberately deletes it.
-    await access(join(base, DEFAULT_SESSION_SEED_MARKER));
-    return;
-  } catch {
-    // No marker: continue with the fresh-root check below.
+  for (const marker of [DEFAULT_SESSION_SEED_MARKER, DEFAULT_SESSION_DELETED_MARKER]) {
+    try {
+      await access(join(base, marker));
+      return;
+    } catch {
+      // No marker: continue with the fresh-root check below.
+    }
   }
   try {
     const entries = await readdir(base, { withFileTypes: true });
@@ -181,6 +182,10 @@ export function createSessionStore(root: string): SessionStore {
 
     async remove(name) {
       const full = locate(name);
+      if (name === DEFAULT_SESSION_NAME) {
+        await mkdir(base, { recursive: true });
+        await writeFile(join(base, DEFAULT_SESSION_DELETED_MARKER), 'deleted\n', 'utf8');
+      }
       await rm(full, { recursive: true, force: true });
     },
 
