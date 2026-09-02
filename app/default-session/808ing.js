@@ -4,7 +4,5 @@ stack(
   s("hh*8?").gain(0.85).sometimesBy(0.1, x=>x.fast(2)).pan(sine.slow(4)),
   note("c1 ~ ~ c1 eb1 ~ c1 ~").s("sawtooth")
     .lpf(300).lpq(8).distort(0.5).shape(0.3).gain(0.6)
-    .slide(0.3).release(0.13),
-  note("<c3:min7 ~ eb3:min7 ~>").s("sawtooth")
-    .lpf(280).lpq(3).gain(0.35).room(0.7).attack(0.3).release(1)
+    .slide(0.3).release(0.13)
 ).swingBy(1/16, 8)
