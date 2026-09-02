@@ -1,7 +1,38 @@
 import { Pattern, noteToMidi, valueToMidi } from '@strudel/core';
-import { aliasBank, registerSynthSounds, registerZZFXSounds, samples } from '@strudel/webaudio';
+import { aliasBank, getSound, registerSound, registerSynthSounds, registerZZFXSounds, samples } from '@strudel/webaudio';
+import gm from '@strudel/soundfonts/gm.mjs';
 
 const baseCDN = 'https://strudel.b-cdn.net';
+
+/**
+ * A failed soundfont fetch (CSP block, network error, renamed upstream file)
+ * otherwise throws deep inside @strudel/soundfonts naming only the internal
+ * font filename, or nothing at all — see AGENTS.md "Error surfaces". Re-wrap
+ * each gm_* trigger so the message names the instrument as typed in the
+ * pattern, e.g. `s("gm_pad_halo")`, and let it flow through the existing
+ * [getTrigger]/strudel.log pipeline in useStrudel.ts.
+ */
+export function nameSoundfontLoadErrors() {
+  for (const name of Object.keys(gm)) {
+    const sound = getSound(name);
+    if (!sound) {
+      continue;
+    }
+    const { onTrigger, data } = sound;
+    registerSound(
+      name,
+      async (...args) => {
+        try {
+          return await onTrigger(...args);
+        } catch (err) {
+          const cause = err instanceof Error ? err.message : String(err);
+          throw new Error(`Could not load soundfont "${name}": ${cause}`);
+        }
+      },
+      data,
+    );
+  }
+}
 
 /**
  * Sounds available before any pattern runs.
@@ -14,7 +45,10 @@ export async function prebake() {
   await Promise.all([
     registerSynthSounds(),
     registerZZFXSounds(),
-    import('@strudel/soundfonts').then(({ registerSoundfonts }) => registerSoundfonts()),
+    import('@strudel/soundfonts').then(({ registerSoundfonts }) => {
+      registerSoundfonts();
+      nameSoundfontLoadErrors();
+    }),
     samples(`${baseCDN}/piano.json`, `${baseCDN}/piano/`, { prebake: true }),
     samples(`${baseCDN}/vcsl.json`, `${baseCDN}/VCSL/`, { prebake: true }),
     samples(`${baseCDN}/tidal-drum-machines.json`, `${baseCDN}/tidal-drum-machines/machines/`, {
