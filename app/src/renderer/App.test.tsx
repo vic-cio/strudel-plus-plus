@@ -130,6 +130,8 @@ afterEach(() => {
 
 beforeEach(() => {
   setStateMock.mockClear();
+  desktop.sessions.list.mockResolvedValue([{ name: 'we cook', beats: 2, usedAt: 1 }]);
+  desktop.sessions.open.mockClear();
   desktop.beats.listInfo.mockResolvedValue([
     { name: '808ing.js', modifiedAt: 1 },
     { name: 'we begin.js', modifiedAt: 2 },
@@ -256,6 +258,27 @@ describe('App session state', () => {
 
     // The buffer falls back to a real beat and the pointer says so.
     await waitFor(() => expect(persistedBeats().at(-1)).toBe('808ing.js'));
+  });
+
+  it('keeps the previous session visible when loading the new session fails', async () => {
+    desktop.sessions.list.mockResolvedValue([
+      { name: 'we cook', beats: 2, usedAt: 2 },
+      { name: 'other session', beats: 2, usedAt: 1 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    await user.click(screen.getByTitle('Switch session'));
+    desktop.beats.read.mockRejectedValueOnce(new Error('beat load failed'));
+    await user.click(screen.getByText('other session'));
+
+    expect(await screen.findByText('beat load failed')).toBeTruthy();
+    expect(desktop.sessions.open).toHaveBeenLastCalledWith('we cook');
+    await user.click(screen.getByRole('button', { name: 'cancel' }));
+
+    expect(screen.getByTitle('Switch session').textContent).toContain('we cook');
+    expect(screen.getByRole('button', { name: 'we begin.js' })).toBeTruthy();
   });
 
   it('still persists tempo and sort state next to the beat pointer', async () => {

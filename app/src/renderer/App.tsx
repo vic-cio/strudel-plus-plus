@@ -282,91 +282,102 @@ export function App() {
     (name: string, make = false) => {
       beatActivationRef.current += 1;
       captureCurrentDraft();
+      const previousSession = sessionRef.current;
+      let mainSessionOpened = false;
       return attempt(async () => {
-        await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
-        const saved = await desktop.sessions.state(name);
-        const list = await refresh();
-        // Resolve everything the open needs — including the restored beat's
-        // content — before touching any state. A failure up to here leaves
-        // the previous session exactly as it was, with the picker showing
-        // what went wrong.
-        const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
-        const restoredManualOrder = saved.manualBeatOrder ?? [];
-        const restoredCps = saved.cpsByBeat ?? {};
-        const restoredDock = normalizeDockState(
-          saved.dock,
-          listPlugins().map((plugin) => plugin.id),
-        );
-        const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
-        const contents = await Promise.all(
-          list.map(async (item) => ({ name: item.name, content: await desktop.beats.read(item.name) })),
-        );
-        const contentByBeat = new Map(contents.map((item) => [item.name, item.content]));
-        const content = beat ? contentByBeat.get(beat) : undefined;
-
-        let latestSessions: SessionSummary[] | undefined;
         try {
-          latestSessions = await desktop.sessions.list();
-        } catch {
-          // Keep the list the picker already had.
-        }
+          await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
+          mainSessionOpened = true;
+          const saved = await desktop.sessions.state(name);
+          const list = await desktop.beats.listInfo();
+          // Resolve everything the open needs — including the restored beat's
+          // content — before touching any state. A failure up to here leaves
+          // the previous session exactly as it was, with the picker showing
+          // what went wrong.
+          const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
+          const restoredManualOrder = saved.manualBeatOrder ?? [];
+          const restoredCps = saved.cpsByBeat ?? {};
+          const restoredDock = normalizeDockState(
+            saved.dock,
+            listPlugins().map((plugin) => plugin.id),
+          );
+          const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
+          const contents = await Promise.all(
+            list.map(async (item) => ({ name: item.name, content: await desktop.beats.read(item.name) })),
+          );
+          const contentByBeat = new Map(contents.map((item) => [item.name, item.content]));
+          const content = beat ? contentByBeat.get(beat) : undefined;
 
-        let nextDraftState = draftStateRef.current;
-        for (const item of contents) {
-          const current = nextDraftState[name];
-          const savedContent = current?.saved[item.name];
-          const draftContent = current?.drafts[item.name];
-          if (savedContent === undefined) {
-            nextDraftState = seedBeat(nextDraftState, name, item.name, item.content);
-            continue;
+          let latestSessions: SessionSummary[] | undefined;
+          try {
+            latestSessions = await desktop.sessions.list();
+          } catch {
+            // Keep the list the picker already had.
           }
-          const decision = resolveDiskChange({
-            diskContent: item.content,
-            bufferContent: draftContent ?? savedContent,
-            lastSavedContent: savedContent,
-          });
-          if (decision.kind === 'noop') {
-            nextDraftState = observeDisk(nextDraftState, name, item.name, item.content);
-          } else if (decision.kind === 'apply') {
-            nextDraftState = acceptDisk(nextDraftState, name, item.name, decision.content);
+
+          let nextDraftState = draftStateRef.current;
+          for (const item of contents) {
+            const current = nextDraftState[name];
+            const savedContent = current?.saved[item.name];
+            const draftContent = current?.drafts[item.name];
+            if (savedContent === undefined) {
+              nextDraftState = seedBeat(nextDraftState, name, item.name, item.content);
+              continue;
+            }
+            const decision = resolveDiskChange({
+              diskContent: item.content,
+              bufferContent: draftContent ?? savedContent,
+              lastSavedContent: savedContent,
+            });
+            if (decision.kind === 'noop') {
+              nextDraftState = observeDisk(nextDraftState, name, item.name, item.content);
+            } else if (decision.kind === 'apply') {
+              nextDraftState = acceptDisk(nextDraftState, name, item.name, decision.content);
+            } else {
+              nextDraftState = markConflict(nextDraftState, name, item.name, decision.diskContent);
+            }
+          }
+
+          // From here the open is synchronous: the app flips to the new session
+          // in one render with no await in between. The previous code set a
+          // hydration flag across awaits, and a failure in that window blocked
+          // session-state writes for the rest of the run, freezing the
+          // persisted beat on whatever an earlier open had written.
+          beatsRef.current = list;
+          setBeats(list);
+          beatSortRef.current = restoredSort;
+          manualBeatOrderRef.current = restoredManualOrder;
+          cpsByBeatRef.current = restoredCps;
+          setBeatSort(restoredSort);
+          setManualBeatOrder(restoredManualOrder);
+          setCpsByBeat(restoredCps);
+          setDock(restoredDock);
+          setSession(name);
+          sessionRef.current = name;
+          updateDraftState(nextDraftState);
+          setPicking(false);
+          if (latestSessions) {
+            setSessions(latestSessions);
+          }
+
+          if (beat && content !== undefined) {
+            activate(beat, content);
           } else {
-            nextDraftState = markConflict(nextDraftState, name, item.name, decision.diskContent);
+            setOpen(undefined);
+            openRef.current = undefined;
+            bufferRef.current = '';
+            setBuffer('');
+            setCode('');
+            clearError();
+            // Nothing is open; say so, rather than leaving a beat name behind
+            // that no longer resolves to a file on disk.
+            persistBeat(null);
           }
-        }
-
-        // From here the open is synchronous: the app flips to the new session
-        // in one render with no await in between. The previous code set a
-        // hydration flag across awaits, and a failure in that window blocked
-        // session-state writes for the rest of the run — freezing the
-        // persisted beat on whatever an earlier open had written, which the
-        // harness then read and edited. No await, no window.
-        beatSortRef.current = restoredSort;
-        manualBeatOrderRef.current = restoredManualOrder;
-        cpsByBeatRef.current = restoredCps;
-        setBeatSort(restoredSort);
-        setManualBeatOrder(restoredManualOrder);
-        setCpsByBeat(restoredCps);
-        setDock(restoredDock);
-        setSession(name);
-        sessionRef.current = name;
-        updateDraftState(nextDraftState);
-        setPicking(false);
-        if (latestSessions) {
-          setSessions(latestSessions);
-        }
-
-        if (beat && content !== undefined) {
-          activate(beat, content);
-        } else {
-          setOpen(undefined);
-          openRef.current = undefined;
-          bufferRef.current = '';
-          setBuffer('');
-          setCode('');
-          clearError();
-          // Nothing is open; say so, rather than leaving a beat name behind
-          // that no longer resolves to a file on disk.
-          persistBeat(null);
+        } catch (error) {
+          if (mainSessionOpened && previousSession !== undefined) {
+            await desktop.sessions.open(previousSession);
+          }
+          throw error;
         }
       });
     },

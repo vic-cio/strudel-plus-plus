@@ -196,12 +196,13 @@ export function removeBeat(state: DraftState, session: string, beat: string): Dr
 export function isBeatDirty(state: DraftState, session: string, beat: string): boolean {
   const current = sessionFor(state, session);
   const draft = current.drafts[beat];
-  return draft !== undefined && draft !== current.saved[beat];
+  return (draft !== undefined && draft !== current.saved[beat]) || current.conflicts[beat] !== undefined;
 }
 
 export function dirtyBeats(state: DraftState, session: string): ReadonlySet<string> {
   const current = sessionFor(state, session);
-  return new Set(Object.keys(current.drafts).filter((beat) => isBeatDirty(state, session, beat)));
+  const beats = new Set([...Object.keys(current.drafts), ...Object.keys(current.conflicts)]);
+  return new Set([...beats].filter((beat) => isBeatDirty(state, session, beat)));
 }
 
 export function hasDirtyDrafts(state: DraftState): boolean {

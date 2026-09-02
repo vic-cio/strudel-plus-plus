@@ -3,6 +3,7 @@ import {
   acceptDisk,
   activateBeat,
   dirtyBeats,
+  getDraftSession,
   hasDirtyDrafts,
   markConflict,
   recordDraft,
@@ -46,6 +47,17 @@ describe('renderer beat draft state', () => {
 
     expect(dirtyBeats(accepted, 'session')).toEqual(new Set());
     expect(activateBeat(accepted, 'session', 'one.js', 'disk C').content).toBe('disk C');
+  });
+
+  it('keeps an unresolved conflict dirty when local content returns to baseline', () => {
+    let state = activateBeat(empty, 'session', 'one.js', 'disk A').state;
+    state = recordDraft(state, 'session', 'one.js', 'draft B');
+    state = markConflict(state, 'session', 'one.js', 'disk C');
+    state = recordDraft(state, 'session', 'one.js', 'disk A');
+
+    expect(dirtyBeats(state, 'session')).toEqual(new Set(['one.js']));
+    expect(hasDirtyDrafts(state)).toBe(true);
+    expect(getDraftSession(state, 'session').conflicts['one.js']).toBe('disk C');
   });
 
   it('keeps dirty state across session boundaries and reports any dirty session', () => {
