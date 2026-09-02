@@ -22,6 +22,11 @@ type DecodedPng = {
   pixels: Buffer;
 };
 
+type LogicalCell = {
+  x: number;
+  y: number;
+};
+
 type PngHeader = {
   width: number;
   height: number;
@@ -164,6 +169,23 @@ const decodePng = (png: Buffer): DecodedPng => {
   return { width: header.width, height: header.height, pixels };
 };
 
+const sampleLogicalPixel = (image: DecodedPng, cell: LogicalCell): Buffer => {
+  const logicalSize = 32;
+  const cellSize = image.width / logicalSize;
+  if (!Number.isInteger(cellSize) || image.width !== image.height) {
+    throw new Error('Expected a square PNG with an integer logical pixel size');
+  }
+  const x = cell.x * cellSize + Math.floor(cellSize / 2);
+  const y = cell.y * cellSize + Math.floor(cellSize / 2);
+  return image.pixels.subarray((y * image.width + x) * 4, (y * image.width + x + 1) * 4);
+};
+
+const expectLogicalColor = (image: DecodedPng, color: Buffer, cells: LogicalCell[]) => {
+  for (const cell of cells) {
+    expect(sampleLogicalPixel(image, cell)).toEqual(color);
+  }
+};
+
 describe('native app identity', () => {
   it('keeps the Electron build identity and verifies its packaged output', () => {
     expect(desktopPackage.build.productName).toBe(PRODUCT_NAME);
@@ -202,6 +224,50 @@ describe('native app identity', () => {
     expect(electronIcon.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     expect(electronIcon.readUInt32BE(16)).toBe(1024);
     expect(electronIcon.readUInt32BE(20)).toBe(1024);
+  });
+
+  it('renders a square S-plus silhouette with a plus in each inner gap', () => {
+    const icon = decodePng(readFileSync(CONFIGURED_ICON_PATH));
+    const panel = Buffer.from([38, 27, 46, 255]);
+    const s = Buffer.from([235, 98, 72, 255]);
+    const plus = Buffer.from([245, 233, 200, 255]);
+
+    expect(icon.width).toBe(1024);
+    expect(icon.height).toBe(icon.width);
+    expectLogicalColor(icon, panel, [
+      { x: 4, y: 4 },
+      { x: 12, y: 10 },
+      { x: 24, y: 10 },
+      { x: 9, y: 19 },
+      { x: 21, y: 23 },
+    ]);
+    expectLogicalColor(icon, s, [
+      { x: 9, y: 6 },
+      { x: 6, y: 10 },
+      { x: 9, y: 15 },
+      { x: 24, y: 20 },
+      { x: 8, y: 25 },
+    ]);
+    expectLogicalColor(icon, plus, [
+      { x: 18, y: 10 },
+      { x: 14, y: 12 },
+      { x: 18, y: 12 },
+      { x: 22, y: 12 },
+      { x: 14, y: 19 },
+      { x: 10, y: 21 },
+      { x: 14, y: 21 },
+      { x: 18, y: 21 },
+    ]);
+    expectLogicalColor(icon, panel, [
+      { x: 16, y: 10 },
+      { x: 20, y: 10 },
+      { x: 16, y: 13 },
+      { x: 20, y: 13 },
+      { x: 12, y: 19 },
+      { x: 16, y: 19 },
+      { x: 12, y: 22 },
+      { x: 16, y: 22 },
+    ]);
   });
 
   it('validates the fresh macOS bundle when one has been built', () => {
