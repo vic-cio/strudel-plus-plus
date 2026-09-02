@@ -125,6 +125,7 @@ afterEach(() => {
 
 beforeEach(() => {
   setStateMock.mockClear();
+  desktop.sessions.list.mockResolvedValue([{ name: 'we cook', beats: 2, usedAt: 1 }]);
   desktop.beats.listInfo.mockResolvedValue([
     { name: '808ing.js', modifiedAt: 1 },
     { name: 'we begin.js', modifiedAt: 2 },
@@ -286,6 +287,41 @@ describe('App session state', () => {
     expect(desktop.beats.read).toHaveBeenCalledWith('808ing.js');
   });
 
+  it('finishes a clone before switching the session', async () => {
+    const user = userEvent.setup();
+    desktop.sessions.list.mockResolvedValue([
+      { name: 'we cook', beats: 2, usedAt: 1 },
+      { name: 'other session', beats: 1, usedAt: 2 },
+    ]);
+    render(<App />);
+    await openSessionFromPicker(user);
+    desktop.sessions.open.mockClear();
+    desktop.beats.create.mockClear();
+
+    let listStarted!: () => void;
+    let releaseList!: (beats: string[]) => void;
+    const started = new Promise<void>((resolve) => {
+      listStarted = resolve;
+    });
+    const listed = new Promise<string[]>((resolve) => {
+      releaseList = resolve;
+    });
+    desktop.beats.list.mockImplementationOnce(async () => {
+      listStarted();
+      return listed;
+    });
+
+    await user.click(screen.getByRole('button', { name: 'clone' }));
+    await started;
+    await user.click(screen.getByTitle('Switch session'));
+    await user.click(screen.getByText('other session'));
+    expect(desktop.sessions.open).not.toHaveBeenCalled();
+
+    releaseList(['we begin.js', '808ing.js']);
+    await waitFor(() => expect(desktop.sessions.open).toHaveBeenCalledWith('other session'));
+    expect(desktop.beats.create).toHaveBeenCalledWith('we begin-2.js', '// we begin.js');
+  });
+
   it('keeps inactive-row rename and delete from moving the active pointer', async () => {
     const user = userEvent.setup();
     desktop.beats.rename.mockClear();
@@ -340,9 +376,58 @@ describe('App session state', () => {
     await user.click(screen.getByText('delete'));
     await started;
     await user.click(screen.getByRole('button', { name: '808ing.js' }));
-    await waitFor(() => expect(persistedBeats().at(-1)).toBe('808ing.js'));
 
     releaseRemoval();
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
+  });
+
+  it('does not adopt an inactive beat after its deletion wins the open race', async () => {
+    const user = userEvent.setup();
+    let listedBeats = [
+      { name: '808ing.js', modifiedAt: 1 },
+      { name: 'we begin.js', modifiedAt: 2 },
+    ];
+    desktop.beats.listInfo.mockImplementation(async () => listedBeats);
+    let removalStarted!: () => void;
+    let releaseRemoval!: () => void;
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    desktop.beats.remove.mockImplementationOnce(async () => {
+      removalStarted();
+      await released;
+      listedBeats = [{ name: 'we begin.js', modifiedAt: 2 }];
+    });
+    let readStarted!: () => void;
+    let releaseRead!: () => void;
+    const readBegan = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    const readReleased = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    desktop.beats.read.mockImplementation(async (name: string) => {
+      if (name === '808ing.js') {
+        readStarted();
+        await readReleased;
+      }
+      return `// ${name}`;
+    });
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
+    await user.click(screen.getByText('delete'));
+    await started;
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    releaseRemoval();
+    await readBegan;
+    releaseRead();
+
     await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
   });
 });

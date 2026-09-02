@@ -251,20 +251,45 @@ async function main() {
     }
     const folder = join(root, name);
     const previousBeatsRoot = config.beatsRoot;
-    config.beatsRoot = folder;
-    let harness: string | undefined;
+    const previousActive = active;
+    const previousStore = store;
+    const previousWatcher = watcher;
+    const previousSession = session;
+    const previousHarness = lastHarness;
+    let harnessRestarted = false;
+    let nextWatcher: FSWatcher | undefined;
     try {
-      harness = restartHarness();
+      config.beatsRoot = folder;
+      harnessRestarted = true;
+      const harness = restartHarness();
+      const nextStore = createBeatStore(folder);
+      await sessions.touch(name);
+      nextWatcher = watchBeats(folder, (change) => window.webContents.send(CH.beatsChanged, change));
+      await previousWatcher?.close();
+      active = name;
+      store = nextStore;
+      watcher = nextWatcher;
+      return { name, folder, harness };
     } catch (error) {
       config.beatsRoot = previousBeatsRoot;
+      active = previousActive;
+      store = previousStore;
+      watcher = previousWatcher;
+      if (nextWatcher) {
+        await nextWatcher.close().catch(() => undefined);
+      }
+      if (harnessRestarted && previousHarness) {
+        lastHarness = previousHarness;
+        try {
+          session = restartHarness();
+        } catch {
+          session = undefined;
+        }
+      } else {
+        session = previousSession;
+      }
       throw error;
     }
-    active = name;
-    store = createBeatStore(folder);
-    await sessions.touch(name);
-    await watcher?.close();
-    watcher = watchBeats(folder, (change) => window.webContents.send(CH.beatsChanged, change));
-    return { name, folder, harness };
   }
 
   ipcMain.handle(CH.sessionsRoot, () => root);

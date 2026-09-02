@@ -105,6 +105,15 @@ export function App() {
     useStrudel(onCodeChange);
   const sessionRef = useRef<string>(undefined);
   sessionRef.current = session;
+  const sessionOperationTail = useRef<Promise<void>>(Promise.resolve());
+  const queueSessionOperation = useCallback((operation: () => Promise<void>): Promise<void> => {
+    const current = sessionOperationTail.current.then(operation, operation);
+    sessionOperationTail.current = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
+  }, []);
 
   /**
    * The EDIT buffer's beat changed — record it now, at the event.
@@ -203,59 +212,61 @@ export function App() {
   /** Open a session: point the app at its folder and restore where it was left. */
   const openSession = useCallback(
     (name: string, make = false) =>
-      attempt(async () => {
-        await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
-        const saved = await desktop.sessions.state(name);
-        const list = await refresh();
-        // Resolve everything the open needs — including the restored beat's
-        // content — before touching any state. A failure up to here leaves
-        // the previous session exactly as it was, with the picker showing
-        // what went wrong.
-        const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
-        const restoredManualOrder = saved.manualBeatOrder ?? [];
-        const restoredCps = saved.cpsByBeat ?? {};
-        const restoredDock = normalizeDockState(
-          saved.dock,
-          listPlugins().map((plugin) => plugin.id),
-        );
-        const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
-        const content = beat ? await desktop.beats.read(beat) : undefined;
+      queueSessionOperation(() =>
+        attempt(async () => {
+          await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
+          const saved = await desktop.sessions.state(name);
+          const list = await refresh();
+          // Resolve everything the open needs — including the restored beat's
+          // content — before touching any state. A failure up to here leaves
+          // the previous session exactly as it was, with the picker showing
+          // what went wrong.
+          const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
+          const restoredManualOrder = saved.manualBeatOrder ?? [];
+          const restoredCps = saved.cpsByBeat ?? {};
+          const restoredDock = normalizeDockState(
+            saved.dock,
+            listPlugins().map((plugin) => plugin.id),
+          );
+          const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
+          const content = beat ? await desktop.beats.read(beat) : undefined;
 
-        // From here the open is synchronous: the app flips to the new session
-        // in one render with no await in between. The previous code set a
-        // hydration flag across awaits, and a failure in that window blocked
-        // session-state writes for the rest of the run — freezing the
-        // persisted beat on whatever an earlier open had written, which the
-        // harness then read and edited. No await, no window.
-        beatSortRef.current = restoredSort;
-        manualBeatOrderRef.current = restoredManualOrder;
-        cpsByBeatRef.current = restoredCps;
-        setBeatSort(restoredSort);
-        setManualBeatOrder(restoredManualOrder);
-        setCpsByBeat(restoredCps);
-        setDock(restoredDock);
-        setSession(name);
-        sessionRef.current = name;
-        setPicking(false);
-        // The picker's recency counts are cosmetic; a failure refreshing
-        // them must not undo the open.
-        try {
-          setSessions(await desktop.sessions.list());
-        } catch {
-          // Keep the list the picker already had.
-        }
+          // From here the open is synchronous: the app flips to the new session
+          // in one render with no await in between. The previous code set a
+          // hydration flag across awaits, and a failure in that window blocked
+          // session-state writes for the rest of the run — freezing the
+          // persisted beat on whatever an earlier open had written, which the
+          // harness then read and edited. No await, no window.
+          beatSortRef.current = restoredSort;
+          manualBeatOrderRef.current = restoredManualOrder;
+          cpsByBeatRef.current = restoredCps;
+          setBeatSort(restoredSort);
+          setManualBeatOrder(restoredManualOrder);
+          setCpsByBeat(restoredCps);
+          setDock(restoredDock);
+          setSession(name);
+          sessionRef.current = name;
+          setPicking(false);
+          // The picker's recency counts are cosmetic; a failure refreshing
+          // them must not undo the open.
+          try {
+            setSessions(await desktop.sessions.list());
+          } catch {
+            // Keep the list the picker already had.
+          }
 
-        if (beat && content !== undefined) {
-          adopt(beat, content);
-        } else {
-          setOpen(undefined);
-          openRef.current = undefined;
-          // Nothing is open; say so, rather than leaving a beat name behind
-          // that no longer resolves to a file on disk.
-          persistBeat(null);
-        }
-      }),
-    [adopt, attempt, persistBeat, refresh],
+          if (beat && content !== undefined) {
+            adopt(beat, content);
+          } else {
+            setOpen(undefined);
+            openRef.current = undefined;
+            // Nothing is open; say so, rather than leaving a beat name behind
+            // that no longer resolves to a file on disk.
+            persistBeat(null);
+          }
+        }),
+      ),
+    [adopt, attempt, persistBeat, queueSessionOperation, refresh],
   );
 
   // Remember tempo, sort, and the plugin dock with the session, so reopening
@@ -320,50 +331,61 @@ export function App() {
   }, [codedTempo, changeCps, open, releaseCps]);
 
   const openBeat = useCallback(
-    async (name: string) => {
-      adopt(name, await desktop.beats.read(name));
-      // Re-evaluating swaps the pattern in place. The scheduler keeps counting,
-      // so the new beat lands on the next cycle boundary and the bar holds.
-      reevaluate();
-    },
-    [adopt, reevaluate],
+    (name: string) =>
+      queueSessionOperation(() =>
+        attempt(async () => {
+          const content = await desktop.beats.read(name);
+          if (!beatsRef.current.some((beat) => beat.name === name)) {
+            return;
+          }
+          adopt(name, content);
+          // Re-evaluating swaps the pattern in place. The scheduler keeps counting,
+          // so the new beat lands on the next cycle boundary and the bar holds.
+          reevaluate();
+        }),
+      ),
+    [adopt, attempt, queueSessionOperation, reevaluate],
   );
 
   /** Clone a beat and move to the copy, without interrupting the sound. */
   const cloneBeat = useCallback(
     (requestedName?: string) =>
-      attempt(async () => {
-        const source = requestedName ?? openRef.current;
-        if (!source) {
-          return;
-        }
-        // The draft map is a later task. Until it exists, the focused row is
-        // the only row with live in-memory content; every other row is cloned
-        // from disk explicitly rather than accidentally from the open buffer.
-        const content = source === openRef.current ? bufferRef.current : await desktop.beats.read(source);
-        const name = nextCloneName(source, await desktop.beats.list());
-        await desktop.beats.create(name, content);
-        await refresh();
-        // The code is unchanged. When audio is already active, reevaluation
-        // hands the scheduler over to the clone without restarting the sound.
-        handoffClonedBeat({
-          playing: state.started,
-          activate: () => adopt(name, content),
-          reevaluate,
-        });
-      }),
-    [adopt, attempt, reevaluate, refresh, state.started],
+      queueSessionOperation(() =>
+        attempt(async () => {
+          const source = requestedName ?? openRef.current;
+          if (!source) {
+            return;
+          }
+          // The draft map is a later task. Until it exists, the focused row is
+          // the only row with live in-memory content; every other row is cloned
+          // from disk explicitly rather than accidentally from the open buffer.
+          const content = source === openRef.current ? bufferRef.current : await desktop.beats.read(source);
+          const name = nextCloneName(source, await desktop.beats.list());
+          await desktop.beats.create(name, content);
+          await refresh();
+          // The code is unchanged. When audio is already active, reevaluation
+          // hands the scheduler over to the clone without restarting the sound.
+          handoffClonedBeat({
+            playing: state.started,
+            activate: () => adopt(name, content),
+            reevaluate,
+          });
+        }),
+      ),
+    [adopt, attempt, queueSessionOperation, reevaluate, refresh, state.started],
   );
 
   const save = useCallback(async () => {
-    if (!openRef.current) {
-      return;
-    }
-    const content = bufferRef.current;
-    await desktop.beats.write(openRef.current, content);
-    savedRef.current = content;
-    setBuffer(content);
-  }, []);
+    return queueSessionOperation(async () => {
+      if (!openRef.current) {
+        return;
+      }
+      const content = bufferRef.current;
+      await desktop.beats.write(openRef.current, content);
+      savedRef.current = content;
+      setBuffer(content);
+    });
+  }, [queueSessionOperation]);
 
   // Global renderer failures (an effect that threw, an IPC that rejected) are
   // already logged to the main process; surfacing them here keeps a failure a
@@ -441,56 +463,62 @@ export function App() {
 
   const create = useCallback(
     (raw: string) =>
-      attempt(async () => {
-        const file = normalizeBeatName(raw);
-        await desktop.beats.create(file, STARTER_BEAT);
-        await refresh();
-        adopt(file, STARTER_BEAT);
-      }),
-    [adopt, attempt, refresh],
+      queueSessionOperation(() =>
+        attempt(async () => {
+          const file = normalizeBeatName(raw);
+          await desktop.beats.create(file, STARTER_BEAT);
+          await refresh();
+          adopt(file, STARTER_BEAT);
+        }),
+      ),
+    [adopt, attempt, queueSessionOperation, refresh],
   );
 
   const rename = useCallback(
     (from: string, raw: string) =>
-      attempt(async () => {
-        const file = normalizeBeatName(raw);
-        const currentOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
-        await desktop.beats.rename(from, file);
-        const renamedOrder = currentOrder.map((name) => (name === from ? file : name));
-        manualBeatOrderRef.current = renamedOrder;
-        setManualBeatOrder(renamedOrder);
-        await refresh();
-        if (from === openRef.current) {
-          setOpen(file);
-          openRef.current = file;
-          persistBeat(file);
-        }
-      }),
-    [attempt, persistBeat, refresh],
+      queueSessionOperation(() =>
+        attempt(async () => {
+          const file = normalizeBeatName(raw);
+          const currentOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
+          await desktop.beats.rename(from, file);
+          const renamedOrder = currentOrder.map((name) => (name === from ? file : name));
+          manualBeatOrderRef.current = renamedOrder;
+          setManualBeatOrder(renamedOrder);
+          await refresh();
+          if (from === openRef.current) {
+            setOpen(file);
+            openRef.current = file;
+            persistBeat(file);
+          }
+        }),
+      ),
+    [attempt, persistBeat, queueSessionOperation, refresh],
   );
 
   const remove = useCallback(
     (name: string) =>
-      attempt(async () => {
-        await desktop.beats.remove(name);
-        const list = await refresh();
-        if (name !== openRef.current) {
-          return;
-        }
-        const next = list[0]?.name;
-        if (next) {
-          const content = await desktop.beats.read(next);
+      queueSessionOperation(() =>
+        attempt(async () => {
+          await desktop.beats.remove(name);
+          const list = await refresh();
           if (name !== openRef.current) {
             return;
           }
-          adopt(next, content);
-        } else {
-          setOpen(undefined);
-          openRef.current = undefined;
-          persistBeat(null);
-        }
-      }),
-    [adopt, attempt, persistBeat, refresh],
+          const next = list[0]?.name;
+          if (next) {
+            const content = await desktop.beats.read(next);
+            if (name !== openRef.current) {
+              return;
+            }
+            adopt(next, content);
+          } else {
+            setOpen(undefined);
+            openRef.current = undefined;
+            persistBeat(null);
+          }
+        }),
+      ),
+    [adopt, attempt, persistBeat, queueSessionOperation, refresh],
   );
 
   // The snapshot is how a harness sees the live buffer and the meters. The

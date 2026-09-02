@@ -215,4 +215,24 @@ describe('openSession', () => {
     const activeHandler = handlers.get(CH.sessionsActive)!;
     expect(await activeHandler({})).toBe('active-session');
   });
+
+  it('restores the previous session and harness if opening fails after restart', async () => {
+    const ptyStartHandler = handlers.get(CH.ptyStart)!;
+    await ptyStartHandler({}, 'shell', 80, 24);
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    const config = ptyStart.mock.calls.at(-1)![2];
+    ptyKill.mockClear();
+    ptyStart.mockClear();
+    sessionsTouch.mockClear();
+    sessionsTouch.mockRejectedValueOnce(new Error('cannot touch target'));
+
+    await expect(sessionsOpenHandler({}, 'candidate-session')).rejects.toThrow('cannot touch target');
+
+    expect(config.beatsRoot).toBe('/tmp/strudel-index-test-root/active-session');
+    expect(ptyKill).toHaveBeenCalledTimes(2);
+    expect(ptyStart).toHaveBeenCalledTimes(2);
+    expect(await handlers.get(CH.sessionsActive)!({})).toBe('active-session');
+    expect(sessionsTouch).toHaveBeenCalledWith('candidate-session');
+  });
 });
