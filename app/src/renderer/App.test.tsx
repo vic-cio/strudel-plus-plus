@@ -162,6 +162,14 @@ async function openSessionFromPicker(user: ReturnType<typeof userEvent.setup>): 
   await waitFor(() => expect(screen.getAllByText('we begin').length).toBeGreaterThan(0));
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 describe('App harness pane under pattern errors', () => {
   it('keeps the harness pane mounted while a giant mini-parse error is shown', async () => {
     // The mini parse error's message runs for hundreds of characters (the
@@ -317,6 +325,61 @@ describe('App beat drafts', () => {
     await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// latest editor code'));
   });
 
+  it('preserves a newer edit made while a save is in flight', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    let editorContent = '// draft A';
+    repl.getCode.mockImplementation(() => editorContent);
+    await editCurrentBeat(editorContent);
+    const write = deferred<void>();
+    desktop.beats.write.mockImplementationOnce(() => write.promise);
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+    await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// draft A'));
+
+    editorContent = '// draft B';
+    await editCurrentBeat(editorContent);
+    await act(async () => {
+      write.resolve();
+      await write.promise;
+    });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'));
+  });
+
+  it('keeps the latest beat selected when disk reads resolve out of order', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    repl.setCode.mockClear();
+    const beatB = deferred<string>();
+    const beatC = deferred<string>();
+    desktop.beats.read.mockImplementation((name: string) => {
+      if (name === '808ing.js') {
+        return beatB.promise;
+      }
+      if (name === 'we begin.js') {
+        return beatC.promise;
+      }
+      return Promise.resolve(`// ${name}`);
+    });
+
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('button', { name: 'we begin.js' }));
+    await act(async () => {
+      beatC.resolve('// latest beat');
+      await beatC.promise;
+    });
+    await act(async () => {
+      beatB.resolve('// stale beat');
+      await beatB.promise;
+    });
+
+    expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('aria-current')).toBe('true');
+    expect(repl.setCode).toHaveBeenLastCalledWith('// latest beat');
+  });
+
   it('warns on close when an inactive beat still has a dirty draft', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -372,6 +435,43 @@ describe('App beat drafts', () => {
     window.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('keeps the newest watcher conflict when reads resolve out of order', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+
+    const staleRead = deferred<string>();
+    const latestRead = deferred<string>();
+    let watcherReads = 0;
+    desktop.beats.read.mockImplementation((name: string) => {
+      if (name !== 'we begin.js') {
+        return Promise.resolve(`// ${name}`);
+      }
+      watcherReads += 1;
+      return watcherReads === 1 ? staleRead.promise : latestRead.promise;
+    });
+    const first = changeHandler.current!({ name: 'we begin.js', event: 'change' });
+    const second = changeHandler.current!({ name: 'we begin.js', event: 'change' });
+    await waitFor(() => expect(watcherReads).toBe(2));
+
+    await act(async () => {
+      latestRead.resolve('// disk D');
+      await second;
+    });
+    await act(async () => {
+      staleRead.resolve('// disk C');
+      await first;
+    });
+
+    desktop.beats.read.mockResolvedValue('// disk D');
+    await user.click(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('button', { name: 'take theirs' }));
+
+    expect(repl.setCode).toHaveBeenLastCalledWith('// disk D');
   });
 
   it('preserves a dirty draft when an app rename emits its unlink first', async () => {

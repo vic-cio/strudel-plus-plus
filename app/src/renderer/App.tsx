@@ -104,6 +104,8 @@ export function App() {
   const openRef = useRef<string>(undefined);
   const draftStateRef = useRef<DraftState>({});
   const pendingRenameRef = useRef<{ from: string; to: string }>();
+  const beatActivationRef = useRef(0);
+  const diskChangeVersionRef = useRef(new Map<string, number>());
   const beatsRef = useRef<BeatSummary[]>([]);
   const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
   const manualBeatOrderRef = useRef<string[]>([]);
@@ -184,6 +186,7 @@ export function App() {
 
   const showBeat = useCallback(
     (name: string, content: string) => {
+      beatActivationRef.current += 1;
       bufferRef.current = content;
       setBuffer(content);
       openRef.current = name;
@@ -276,6 +279,7 @@ export function App() {
   /** Open a session: point the app at its folder and restore where it was left. */
   const openSession = useCallback(
     (name: string, make = false) => {
+      beatActivationRef.current += 1;
       captureCurrentDraft();
       return attempt(async () => {
         await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
@@ -431,8 +435,14 @@ export function App() {
 
   const openBeat = useCallback(
     async (name: string) => {
+      const activation = beatActivationRef.current + 1;
+      beatActivationRef.current = activation;
       captureCurrentDraft();
-      activate(name, await desktop.beats.read(name));
+      const content = await desktop.beats.read(name);
+      if (activation !== beatActivationRef.current) {
+        return;
+      }
+      activate(name, content);
       // Re-evaluating swaps the pattern in place. The scheduler keeps counting,
       // so the new beat lands on the next cycle boundary and the bar holds.
       reevaluate();
@@ -470,6 +480,17 @@ export function App() {
     const content = getCode() ?? bufferRef.current;
     bufferRef.current = content;
     await desktop.beats.write(beatName, content);
+    if (sessionRef.current !== sessionName || openRef.current !== beatName) {
+      updateDraftState(saveBeat(draftStateRef.current, sessionName, beatName, content));
+      return;
+    }
+    const latestContent = getCode() ?? bufferRef.current;
+    if (latestContent !== content) {
+      bufferRef.current = latestContent;
+      setBuffer(latestContent);
+      updateDraftState(recordDraft(draftStateRef.current, sessionName, beatName, latestContent));
+      return;
+    }
     updateDraftState(saveBeat(draftStateRef.current, sessionName, beatName, content));
     setBuffer(content);
   }, [getCode, updateDraftState]);
@@ -487,6 +508,9 @@ export function App() {
   // terminal happens to be watching — instead of landing in the error surface.
   const applyDiskChange = useCallback(
     async (change: BeatChange) => {
+      const version = (diskChangeVersionRef.current.get(change.name) ?? 0) + 1;
+      diskChangeVersionRef.current.set(change.name, version);
+      const isCurrent = () => diskChangeVersionRef.current.get(change.name) === version;
       void refresh();
       const sessionName = sessionRef.current;
       if (!sessionName) {
@@ -516,7 +540,18 @@ export function App() {
       if (change.name === openRef.current) {
         captureCurrentDraft();
       }
-      const diskContent = await desktop.beats.read(change.name);
+      let diskContent: string;
+      try {
+        diskContent = await desktop.beats.read(change.name);
+      } catch (error) {
+        if (!isCurrent()) {
+          return;
+        }
+        throw error;
+      }
+      if (!isCurrent()) {
+        return;
+      }
       const current = draftStateRef.current[sessionName];
       const savedContent = current?.saved[change.name];
       const draftContent = current?.drafts[change.name];
@@ -597,6 +632,7 @@ export function App() {
 
   const rename = useCallback(
     (from: string, raw: string) => {
+      beatActivationRef.current += 1;
       captureCurrentDraft();
       return attempt(async () => {
         const file = normalizeBeatName(raw);
@@ -628,6 +664,7 @@ export function App() {
 
   const remove = useCallback(
     (name: string) => {
+      beatActivationRef.current += 1;
       captureCurrentDraft();
       return attempt(async () => {
         await desktop.beats.remove(name);

@@ -113,11 +113,15 @@ export function activateBeat(state: DraftState, session: string, beat: string, d
 
 /** Mark an explicit save complete for exactly one beat. */
 export function saveBeat(state: DraftState, session: string, beat: string, content: string): DraftState {
-  return updateSession(state, session, (current) => ({
-    drafts: removeKey(current.drafts, beat),
-    saved: setKey(current.saved, beat, content),
-    conflicts: removeKey(current.conflicts, beat),
-  }));
+  return updateSession(state, session, (current) => {
+    const draft = current.drafts[beat];
+    const drafts = draft === undefined || draft === content ? removeKey(current.drafts, beat) : current.drafts;
+    return {
+      drafts,
+      saved: setKey(current.saved, beat, content),
+      conflicts: removeKey(current.conflicts, beat),
+    };
+  });
 }
 
 /** Explicitly accept disk content, discarding only that beat's draft. */
