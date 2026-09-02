@@ -1,23 +1,15 @@
 import { access, lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { BEAT_EXTENSION } from '../shared/beatName';
-import { isBeatSortMode, type BeatSortMode } from '../shared/beatSorting';
-import { isDockState, type DockState } from '../shared/dockState';
+import { isBeatSortMode } from '../shared/beatSorting';
+import { isDockState } from '../shared/dockState';
 import { STARTER_BEAT } from '../shared/starterBeat';
+import type { SessionState } from '../shared/session';
 import { DEFAULT_SESSION_BEATS, DEFAULT_SESSION_NAME, DEFAULT_SESSION_STATE } from './defaultSession';
 import { seedHarnessContent } from './harnessContent';
 
 export type Session = { name: string; beats: number; usedAt: number };
-export type SessionState = {
-  /** The beat the EDIT buffer shows; an explicit null records that nothing is open. */
-  beat?: string | null;
-  cpsByBeat?: Record<string, number>;
-  beatSort?: BeatSortMode;
-  manualBeatOrder?: string[];
-  /** Plugin dock layout. Session-scoped on purpose: beat switches must not
-   * close devices or reset them, so this is never pruned per beat. */
-  dock?: DockState;
-};
+export type { SessionState } from '../shared/session';
 type StoredState = SessionState & { usedAt?: number };
 
 export type SessionStore = {
@@ -35,6 +27,21 @@ const DEFAULT_SESSION_SEED_MARKER = '.default-session-seeded';
 const DEFAULT_SESSION_DELETED_MARKER = '.default-session-deleted';
 const SHARED_FILES = ['AGENTS.md'] as const;
 const SHARED_FOLDERS = ['.claude', '.agents'] as const;
+const RESERVED_ROOT_NAMES = new Set<string>([...SHARED_FILES, ...SHARED_FOLDERS]);
+const rootOperationTails = new Map<string, Promise<void>>();
+
+function queueRootOperation<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  const previous = rootOperationTails.get(root) ?? Promise.resolve();
+  const current = previous.then(operation, operation);
+  rootOperationTails.set(
+    root,
+    current.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return current;
+}
 
 // Date.now() can repeat across calls that land in the same millisecond (e.g. create()
 // immediately followed by touch()), which would make list()'s sort order depend on
@@ -146,27 +153,29 @@ export function createSessionStore(root: string): SessionStore {
 
   return {
     async list() {
-      await mkdir(base, { recursive: true });
-      // The first thing the app asks the store for is this list, so it is
-      // also the moment a fresh root gets its default AGENTS.md and skills,
-      // and — only when it has no sessions of its own yet — the example one.
-      await seedHarnessContent(base);
-      await seedDefaultSession(base);
-      const entries = await readdir(base, { withFileTypes: true });
-      const sessions = await Promise.all(
-        entries
-          .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-          .map(async (entry) => {
-            const full = join(base, entry.name);
-            const files = await readdir(full);
-            return {
-              name: entry.name,
-              beats: files.filter((file) => file.endsWith(BEAT_EXTENSION)).length,
-              usedAt: (await read(full)).usedAt ?? 0,
-            };
-          }),
-      );
-      return sessions.sort((a, b) => b.usedAt - a.usedAt);
+      return queueRootOperation(base, async () => {
+        await mkdir(base, { recursive: true });
+        // The first thing the app asks the store for is this list, so it is
+        // also the moment a fresh root gets its default AGENTS.md and skills,
+        // and — only when it has no sessions of its own yet — the example one.
+        await seedHarnessContent(base);
+        await seedDefaultSession(base);
+        const entries = await readdir(base, { withFileTypes: true });
+        const sessions = await Promise.all(
+          entries
+            .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+            .map(async (entry) => {
+              const full = join(base, entry.name);
+              const files = await readdir(full);
+              return {
+                name: entry.name,
+                beats: files.filter((file) => file.endsWith(BEAT_EXTENSION)).length,
+                usedAt: (await read(full)).usedAt ?? 0,
+              };
+            }),
+        );
+        return sessions.sort((a, b) => b.usedAt - a.usedAt);
+      });
     },
 
     async has(name) {
@@ -174,24 +183,35 @@ export function createSessionStore(root: string): SessionStore {
     },
 
     async create(name) {
-      const full = locate(name);
-      if (await exists(full)) {
-        throw new Error(`${name} already exists.`);
-      }
-      await mkdir(full, { recursive: true });
-      // Never open onto an empty screen with nothing to play.
-      await writeFile(join(full, `untitled${BEAT_EXTENSION}`), STARTER_BEAT, 'utf8');
-      await write(full, { usedAt: nextUsedAt() });
-      await linkShared(base, full);
+      return queueRootOperation(base, async () => {
+        const full = locate(name);
+        if (await exists(full)) {
+          throw new Error(`${name} already exists.`);
+        }
+        await mkdir(full, { recursive: true });
+        // Never open onto an empty screen with nothing to play.
+        await writeFile(join(full, `untitled${BEAT_EXTENSION}`), STARTER_BEAT, 'utf8');
+        await write(full, { usedAt: nextUsedAt() });
+        await linkShared(base, full);
+      });
     },
 
     async remove(name) {
-      const full = locate(name);
-      if (name === DEFAULT_SESSION_NAME) {
-        await mkdir(base, { recursive: true });
-        await writeFile(join(base, DEFAULT_SESSION_DELETED_MARKER), 'deleted\n', 'utf8');
-      }
-      await rm(full, { recursive: true, force: true });
+      return queueRootOperation(base, async () => {
+        const full = locate(name);
+        if (name.startsWith('.') || RESERVED_ROOT_NAMES.has(name)) {
+          throw new Error(`Only a visible session directory can be removed: ${name}`);
+        }
+        const details = await lstat(full);
+        if (!details.isDirectory()) {
+          throw new Error(`Only a visible session directory can be removed: ${name}`);
+        }
+        if (name === DEFAULT_SESSION_NAME) {
+          await mkdir(base, { recursive: true });
+          await writeFile(join(base, DEFAULT_SESSION_DELETED_MARKER), 'deleted\n', 'utf8');
+        }
+        await rm(full, { recursive: true, force: true });
+      });
     },
 
     async touch(name) {

@@ -6,11 +6,13 @@ const listeners = new Map<string, (...args: any[]) => unknown>();
 
 const ptyStart = vi.fn();
 const ptyKill = vi.fn();
+const beatStoreListInfo = vi.fn(async () => []);
+const beatStoreRead = vi.fn();
 
 const beatStoreFactory = vi.fn(() => ({
   list: vi.fn(async () => []),
-  listInfo: vi.fn(async () => []),
-  read: vi.fn(),
+  listInfo: beatStoreListInfo,
+  read: beatStoreRead,
   write: vi.fn(),
   create: vi.fn(),
   rename: vi.fn(),
@@ -81,6 +83,9 @@ describe('openSession', () => {
     process.env.STRUDEL_BEATS_DIR = '/tmp/strudel-index-test-root';
     ptyStart.mockReset();
     ptyStart.mockReturnValue({ write: vi.fn(), resize: vi.fn(), kill: vi.fn() });
+    beatStoreListInfo.mockReset();
+    beatStoreListInfo.mockResolvedValue([]);
+    beatStoreRead.mockReset();
     sessionsHas.mockReset();
     sessionsHas.mockResolvedValue(true);
     sessionsRemove.mockReset();
@@ -106,7 +111,7 @@ describe('openSession', () => {
     // The failed restart must not have left the main process pointed at a
     // session the renderer never adopted.
     expect(config.beatsRoot).toBe(rootBeforeSwitch);
-    expect(beatStoreFactory).toHaveBeenCalledTimes(1); // only the initial root store, never the new session's
+    expect(beatStoreFactory).toHaveBeenCalledTimes(2);
     expect(sessionsTouch).not.toHaveBeenCalled();
     expect(watchBeatsMock).not.toHaveBeenCalled();
 
@@ -117,16 +122,40 @@ describe('openSession', () => {
   it('adopts the new session once the harness restart succeeds', async () => {
     const ptyStartHandler = handlers.get(CH.ptyStart)!;
     await ptyStartHandler({}, 'shell', 80, 24);
+    beatStoreListInfo.mockResolvedValueOnce([{ name: 'intro.js', modifiedAt: 1 }]);
+    beatStoreRead.mockResolvedValueOnce('// intro.js');
 
     const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
     const result = await sessionsOpenHandler({}, 'new-session');
 
-    expect(result).toMatchObject({ name: 'new-session' });
+    expect(result).toMatchObject({
+      name: 'new-session',
+      beats: [{ name: 'intro.js', modifiedAt: 1 }],
+      beat: 'intro.js',
+      content: '// intro.js',
+    });
     expect(sessionsTouch).toHaveBeenCalledWith('new-session');
     expect(watchBeatsMock).toHaveBeenCalled();
 
     const activeHandler = handlers.get(CH.sessionsActive)!;
     expect(await activeHandler({})).toBe('new-session');
+  });
+
+  it('hydrates the target before restarting the existing harness', async () => {
+    const ptyStartHandler = handlers.get(CH.ptyStart)!;
+    await ptyStartHandler({}, 'shell', 80, 24);
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    ptyKill.mockClear();
+    sessionsTouch.mockClear();
+    beatStoreListInfo.mockResolvedValueOnce([{ name: 'intro.js', modifiedAt: 1 }]);
+    beatStoreRead.mockRejectedValueOnce(new Error('beat disappeared'));
+
+    await expect(sessionsOpenHandler({}, 'candidate-session')).rejects.toThrow('beat disappeared');
+
+    expect(ptyKill).not.toHaveBeenCalled();
+    expect(sessionsTouch).not.toHaveBeenCalled();
+    expect(await handlers.get(CH.sessionsActive)!({})).toBe('active-session');
   });
 
   it('guards deletion of the active session before reaching the store', async () => {

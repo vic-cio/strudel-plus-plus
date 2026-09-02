@@ -36,18 +36,36 @@ const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
     changeCps: vi.fn(),
     releaseCps: vi.fn(),
   };
+  type MockSessionState = {
+    beat?: string | null;
+    dock?: { split?: boolean; panes?: { tabs?: string[]; active?: string }[] };
+  };
+  const sessionState = vi.fn(async (): Promise<MockSessionState> => ({ beat: 'we begin.js' }));
+  const openSessionResult = async (name: string) => {
+    const state = await sessionState();
+    const beats = [
+      { name: '808ing.js', modifiedAt: 1 },
+      { name: 'we begin.js', modifiedAt: 2 },
+    ];
+    const beat = state.beat && beats.some((item) => item.name === state.beat) ? state.beat : beats[0]?.name;
+    return {
+      name,
+      folder: `/sessions-root/${name}`,
+      harness: 'shell',
+      state,
+      beats,
+      beat,
+      content: beat ? `// ${beat}` : undefined,
+    };
+  };
   const desktop = {
     sessions: {
       root: vi.fn(async () => '/sessions-root'),
       list: vi.fn(async () => [{ name: 'we cook', beats: 2, usedAt: 1 }]),
       active: vi.fn(async () => 'we cook'),
-      create: vi.fn(async (name: string) => ({ name, folder: `/sessions-root/${name}` })),
-      open: vi.fn(async (name: string) => ({ name, folder: `/sessions-root/${name}` })),
-      state: vi.fn(
-        async (): Promise<{ beat?: string | null; dock?: Record<string, unknown> }> => ({
-          beat: 'we begin.js',
-        }),
-      ),
+      create: vi.fn(openSessionResult),
+      open: vi.fn(openSessionResult),
+      state: sessionState,
       setState: setStateMock,
     },
     beats: {
@@ -245,6 +263,16 @@ describe('App session state', () => {
 
     // The buffer falls back to a real beat and the pointer says so.
     await waitFor(() => expect(persistedBeats().at(-1)).toBe('808ing.js'));
+  });
+
+  it('commits a session from the atomic open payload', async () => {
+    desktop.beats.read.mockRejectedValue(new Error('mutable store read raced'));
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    expect(screen.getByTitle('Switch session').textContent).toContain('we cook');
+    expect(persistedBeats().at(-1)).toBe('we begin.js');
   });
 
   it('still persists tempo and sort state next to the beat pointer', async () => {

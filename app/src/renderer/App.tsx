@@ -185,8 +185,7 @@ export function App() {
     }
   }, []);
 
-  const refresh = useCallback(async () => {
-    const list = await desktop.beats.listInfo();
+  const applyBeatList = useCallback((list: BeatSummary[]) => {
     beatsRef.current = list;
     setBeats(list);
     if (beatSortRef.current === 'manual') {
@@ -198,6 +197,8 @@ export function App() {
     }
     return list;
   }, []);
+
+  const refresh = useCallback(async () => applyBeatList(await desktop.beats.listInfo()), [applyBeatList]);
 
   useEffect(() => {
     void (async () => {
@@ -214,13 +215,9 @@ export function App() {
     (name: string, make = false) =>
       queueSessionOperation(() =>
         attempt(async () => {
-          await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
-          const saved = await desktop.sessions.state(name);
-          const list = await refresh();
-          // Resolve everything the open needs — including the restored beat's
-          // content — before touching any state. A failure up to here leaves
-          // the previous session exactly as it was, with the picker showing
-          // what went wrong.
+          const opened = await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
+          const saved = opened.state;
+          applyBeatList(opened.beats);
           const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
           const restoredManualOrder = saved.manualBeatOrder ?? [];
           const restoredCps = saved.cpsByBeat ?? {};
@@ -228,8 +225,8 @@ export function App() {
             saved.dock,
             listPlugins().map((plugin) => plugin.id),
           );
-          const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
-          const content = beat ? await desktop.beats.read(beat) : undefined;
+          const beat = opened.beat;
+          const content = opened.content;
 
           // From here the open is synchronous: the app flips to the new session
           // in one render with no await in between. The previous code set a
@@ -247,14 +244,6 @@ export function App() {
           setSession(name);
           sessionRef.current = name;
           setPicking(false);
-          // The picker's recency counts are cosmetic; a failure refreshing
-          // them must not undo the open.
-          try {
-            setSessions(await desktop.sessions.list());
-          } catch {
-            // Keep the list the picker already had.
-          }
-
           if (beat && content !== undefined) {
             adopt(beat, content);
           } else {
@@ -264,9 +253,11 @@ export function App() {
             // that no longer resolves to a file on disk.
             persistBeat(null);
           }
+
+          void desktop.sessions.list().then(setSessions, () => undefined);
         }),
       ),
-    [adopt, attempt, persistBeat, queueSessionOperation, refresh],
+    [adopt, applyBeatList, attempt, persistBeat, queueSessionOperation],
   );
 
   // Remember tempo, sort, and the plugin dock with the session, so reopening

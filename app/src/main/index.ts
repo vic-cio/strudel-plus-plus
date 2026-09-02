@@ -9,12 +9,13 @@ import { augmentPath, loginShellPath } from './env';
 import { ensurePtyHelper } from './ptyHelper';
 import { createMidiOut, type MidiMessage } from './midi';
 import { createOscSender, type OscMessage } from './oscSender';
-import { createSessionStore, type SessionState } from './sessions';
+import { createSessionStore } from './sessions';
 import { createPtyHost } from './pty';
 import { watchBeats } from './watcher';
 import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
+import type { SessionOpenResult, SessionState } from '../shared/session';
 
 const DEFAULT_ROOTS = [join(homedir(), 'Documents/Programming/strudel/my-sessions'), join(homedir(), 'Music/Strudel')];
 
@@ -245,11 +246,18 @@ async function main() {
   ipcMain.on(CH.midiSend, (_event, messages: MidiMessage[]) => midi.send(messages));
   ipcMain.handle(CH.midiPorts, () => midi.ports());
 
-  async function openSession(name: string) {
+  async function openSession(name: string): Promise<SessionOpenResult> {
     if (!(await sessions.has(name))) {
       throw new Error(`Cannot open missing session: ${name}`);
     }
     const folder = join(root, name);
+    const nextStore = createBeatStore(folder);
+    const nextState = await sessions.getState(name);
+    const nextBeats = await nextStore.listInfo();
+    const nextBeat = nextState.beat && nextBeats.some((beat) => beat.name === nextState.beat)
+      ? nextState.beat
+      : nextBeats[0]?.name;
+    const nextContent = nextBeat ? await nextStore.read(nextBeat) : undefined;
     const previousBeatsRoot = config.beatsRoot;
     const previousActive = active;
     const previousStore = store;
@@ -262,14 +270,21 @@ async function main() {
       config.beatsRoot = folder;
       harnessRestarted = true;
       const harness = restartHarness();
-      const nextStore = createBeatStore(folder);
       await sessions.touch(name);
       nextWatcher = watchBeats(folder, (change) => window.webContents.send(CH.beatsChanged, change));
       await previousWatcher?.close();
       active = name;
       store = nextStore;
       watcher = nextWatcher;
-      return { name, folder, harness };
+      return {
+        name,
+        folder,
+        harness,
+        state: nextState,
+        beats: nextBeats,
+        beat: nextBeat,
+        content: nextContent,
+      };
     } catch (error) {
       config.beatsRoot = previousBeatsRoot;
       active = previousActive;
