@@ -2,6 +2,7 @@ import { access, lstat, mkdir, readdir, readFile, symlink, writeFile } from 'nod
 import { join, resolve, sep } from 'node:path';
 import { BEAT_EXTENSION } from '../shared/beatName';
 import { isBeatSortMode, type BeatSortMode } from '../shared/beatSorting';
+import { isDockState, type DockState } from '../shared/dockState';
 import { seedHarnessContent } from './harnessContent';
 
 export type Session = { name: string; beats: number; usedAt: number };
@@ -11,6 +12,9 @@ export type SessionState = {
   cpsByBeat?: Record<string, number>;
   beatSort?: BeatSortMode;
   manualBeatOrder?: string[];
+  /** Plugin dock layout. Session-scoped on purpose: beat switches must not
+   * close devices or reset them, so this is never pruned per beat. */
+  dock?: DockState;
 };
 type StoredState = SessionState & { usedAt?: number };
 
@@ -191,6 +195,9 @@ async function read(sessionPath: string): Promise<StoredState> {
     }
     if (isStringArray(parsed.manualBeatOrder)) {
       state.manualBeatOrder = parsed.manualBeatOrder;
+    }
+    if (isDockState(parsed.dock)) {
+      state.dock = parsed.dock;
     }
     // Migrate the old session-wide tempo to the beat it belonged to.
     if (typeof parsed.cps === 'number' && Number.isFinite(parsed.cps) && state.beat) {

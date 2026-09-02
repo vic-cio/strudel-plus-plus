@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { App } from './App';
 
 /**
@@ -11,7 +11,7 @@ import { App } from './App';
  * pointer from .session.json and edits exactly what it names.
  */
 const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
-  type WrittenState = { beat?: string | null; cpsByBeat?: Record<string, number> };
+  type WrittenState = { beat?: string | null; cpsByBeat?: Record<string, number>; dock?: unknown };
   const setStateMock = vi.fn(async (_session: string, _state: WrittenState) => {});
   // The watcher handler is captured so tests can play harness: write to disk,
   // the app learns of it through this callback, exactly as in production.
@@ -43,7 +43,11 @@ const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
       active: vi.fn(async () => 'we cook'),
       create: vi.fn(async (name: string) => ({ name, folder: `/sessions-root/${name}` })),
       open: vi.fn(async (name: string) => ({ name, folder: `/sessions-root/${name}` })),
-      state: vi.fn(async () => ({ beat: 'we begin.js' })),
+      state: vi.fn(
+        async (): Promise<{ beat?: string | null; dock?: Record<string, unknown> }> => ({
+          beat: 'we begin.js',
+        }),
+      ),
       setState: setStateMock,
     },
     beats: {
@@ -104,6 +108,17 @@ if (!document.fonts) {
 
 afterEach(() => {
   cleanup();
+});
+
+// The dock's EQ mounts a canvas in every App test; jsdom without the canvas
+// package logs a noisy "not implemented" for getContext, and the EQ guards
+// null anyway. One file-wide stub keeps the output clean.
+let canvasContext: MockInstance<typeof HTMLCanvasElement.prototype.getContext>;
+beforeEach(() => {
+  canvasContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+});
+afterEach(() => {
+  canvasContext.mockRestore();
 });
 
 beforeEach(() => {
@@ -236,6 +251,54 @@ describe('App session state', () => {
       const maps = setStateMock.mock.calls.filter((call) => 'cpsByBeat' in call[1]);
       expect(maps.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe('App plugin dock', () => {
+  it('keeps the dock open across a beat switch and persists it with the session', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    await user.click(screen.getByTitle('Add device'));
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '[ EQ ]' }));
+    expect(screen.getByRole('button', { name: '[ EQ ]' })).toBeTruthy();
+
+    // Plugins are live gear: switching beats must not close the EQ.
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    expect(screen.getByRole('button', { name: '[ EQ ]' })).toBeTruthy();
+
+    await waitFor(() => {
+      const writes = setStateMock.mock.calls.filter((call) => 'dock' in call[1]);
+      expect(writes.at(-1)?.[1].dock).toEqual({ split: false, panes: [{ tabs: ['eq'], active: 'eq' }] });
+    });
+  });
+
+  it('restores the split dock the session was left in', async () => {
+    desktop.sessions.state.mockResolvedValue({
+      beat: 'we begin.js',
+      dock: { split: true, panes: [{ tabs: ['eq'], active: 'eq' }, { tabs: [] }] },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    expect(document.querySelectorAll('.dock-pane')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: '[ EQ ]' })).toBeTruthy();
+    expect(screen.getAllByTitle('Merge back to one pane')).toHaveLength(2);
+  });
+
+  it('forgets dock tabs for plugins that no longer exist', async () => {
+    desktop.sessions.state.mockResolvedValue({
+      beat: 'we begin.js',
+      dock: { split: false, panes: [{ tabs: ['ghost'] }] },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    expect(screen.getByText('[ no device ]')).toBeTruthy();
+    expect(screen.queryByText('[ GHOST ]')).toBeNull();
   });
 });
 

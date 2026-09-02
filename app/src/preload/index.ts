@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { CH, type BeatChange } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
 import type { BeatSortMode, BeatSummary } from '../shared/beatSorting';
+import type { DockState } from '../shared/dockState';
 
 /**
  * The whole surface the renderer gets. Nothing here takes a path the renderer
@@ -22,6 +23,7 @@ const api = {
       cpsByBeat?: Record<string, number>;
       beatSort?: BeatSortMode;
       manualBeatOrder?: string[];
+      dock?: DockState;
     }> => ipcRenderer.invoke(CH.sessionsState, name),
     setState: (
       name: string,
@@ -30,6 +32,7 @@ const api = {
         cpsByBeat?: Record<string, number>;
         beatSort?: BeatSortMode;
         manualBeatOrder?: string[];
+        dock?: DockState;
       },
     ): Promise<void> => ipcRenderer.invoke(CH.sessionsSetState, name, state),
   },
