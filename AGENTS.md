@@ -29,6 +29,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - A blocked or failed sound fetch otherwise resolves to silence with no visible error: a rejected `onTrigger` (e.g. a soundfont fetch) is already caught by upstream's `getTrigger` and reaches the `strudel.log` sink above, but the thrown message may not name the sound. `prebake.mjs`'s `nameSoundfontLoadErrors` re-wraps each `gm_*` trigger so the message names the instrument as typed in the pattern (e.g. `s("gm_pad_halo")`) before it reaches that sink.
 - `app/src/renderer/index.html`'s CSP `default-src` must list every host the app fetches from at runtime — `@strudel/soundfonts` fetches font data from `felixroos.github.io` (see above) and `strudel.b-cdn.net` serves the default sample banks (`prebake.mjs`); a missing host fails those fetches silently rather than throwing a visible error, since fetch rejections from a CSP block still flow through the same sink. `csp.test.ts` pins the required hosts.
 
+## Default example session
+
+- A brand-new sessions root (no session folder yet) is seeded with one example session, `we cook`, the moment anything calls `list()` — see `seedDefaultSession` in `app/src/main/sessions.ts`, alongside `seedHarnessContent`. It never touches a root that already has a session. The snapshot's files live under `app/default-session/` and are pulled in at build time via Vite `?raw`/JSON imports in `app/src/main/defaultSession.ts`, the same inlining approach `harnessContent.ts` uses for its defaults — no extra packaging step needed. `defaultSession.ts` strips the snapshot's `usedAt`; seeding always stamps its own via `nextUsedAt`.
+
 ## Beat watcher ignore rule
 
 `watchBeats` skips dot-entries _relative to the watched root only_ (`ignored` in `app/src/main/watcher.ts`). Filtering on absolute path parts would silently deafen any sessions root under a dot-directory (e.g. worktrees like `.treehouse`), with no error anywhere. `watcher.test.ts` pins both sides of this rule.
