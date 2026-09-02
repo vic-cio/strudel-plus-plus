@@ -40,9 +40,12 @@ app.
 ## Sessions and harnesses
 
 The app opens one session folder at a time. By default it uses
-`my-sessions/`, or the directory named by `STRUDEL_BEATS_DIR`; session data is
-ignored by Git. Each session contains beat `.js` files, an `AGENTS.md` context
-file, optional shared helper links, and `.session.json` state.
+`~/Music/strudel++`, or the directory named by `STRUDEL_BEATS_DIR`; session
+data is ignored by Git. On first launch after the rename, sessions from
+`~/Music/Strudel` and the former `~/Documents/Programming/strudel/my-sessions`
+root are migrated into the canonical directory without overwriting collisions.
+Each session contains beat `.js` files, an `AGENTS.md` context file, optional
+shared helper links, and `.session.json` state.
 
 A sessions root that lacks shared harness content is seeded when the app first
 lists its sessions: a default `AGENTS.md` describing the live-coding contract

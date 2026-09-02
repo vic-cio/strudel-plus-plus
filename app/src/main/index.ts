@@ -1,7 +1,6 @@
 import { createReadStream, existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
-import { homedir } from 'node:os';
 import { extname, join, normalize, resolve } from 'node:path';
 import { BrowserWindow, app, ipcMain, shell } from 'electron';
 import { createBeatStore } from './beats';
@@ -10,21 +9,12 @@ import { ensurePtyHelper } from './ptyHelper';
 import { createMidiOut, type MidiMessage } from './midi';
 import { createOscSender, type OscMessage } from './oscSender';
 import { createSessionStore, type SessionState } from './sessions';
+import { resolveSessionsRoot } from './sessionsRoot';
 import { createPtyHost } from './pty';
 import { watchBeats } from './watcher';
 import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
-
-const DEFAULT_ROOTS = [join(homedir(), 'Documents/Programming/strudel/my-sessions'), join(homedir(), 'Music/Strudel')];
-
-function sessionsRoot(): string {
-  const fromEnv = process.env.STRUDEL_BEATS_DIR;
-  if (fromEnv) {
-    return resolve(fromEnv);
-  }
-  return DEFAULT_ROOTS.find((candidate) => existsSync(candidate)) ?? DEFAULT_ROOTS[1]!;
-}
 
 const MIME: Record<string, string> = {
   '.html': 'text/html',
@@ -94,7 +84,7 @@ process.on('unhandledRejection', (reason) => {
 async function main() {
   await app.whenReady();
 
-  const root = sessionsRoot();
+  const root = await resolveSessionsRoot();
   const sessions = createSessionStore(root);
 
   // Everything below hangs off which session is open: the beat store is rooted
