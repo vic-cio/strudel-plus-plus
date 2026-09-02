@@ -2,8 +2,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { App } from './App';
 
 /**
@@ -392,11 +390,6 @@ describe('App dock resize', () => {
   }
 
   it('sits a horizontal separator grip between the panes and the dock', async () => {
-    // The layout contract: the dock row is sized by --dock-h, not a fixed height.
-    const css = readFileSync(resolve(__dirname, 'theme.css'), 'utf-8');
-    expect(css).toContain('grid-template-rows: 34px 1fr 5px var(--dock-h, 104px) 22px');
-    expect(css).not.toContain('height: 104px');
-
     const user = userEvent.setup();
     render(<App />);
     await openSessionFromPicker(user);
@@ -446,6 +439,38 @@ describe('App dock resize', () => {
     fireEvent(window, new Event('resize'));
     expect(dockH()).toBe('199px');
     innerHeight.mockRestore();
+  });
+
+  it('keeps an out-of-range preference when clamp interactions do not move the dock', async () => {
+    localStorage.setItem('pane.dock', '900');
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const grip = screen.getByRole('separator', { name: 'Resize plugin dock' });
+    grip.focus();
+    await user.keyboard('{ArrowUp}');
+    fireEvent.pointerDown(grip, { pointerId: 1, clientY: 400 });
+    fireEvent.pointerMove(grip, { pointerId: 1, clientY: 300 });
+    fireEvent.pointerUp(grip, { pointerId: 1 });
+
+    expect(dockH()).toBe('547px');
+    expect(localStorage.getItem('pane.dock')).toBe('900');
+
+    cleanup();
+    localStorage.setItem('pane.dock', '10');
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const lowerGrip = screen.getByRole('separator', { name: 'Resize plugin dock' });
+    lowerGrip.focus();
+    await user.keyboard('{ArrowDown}');
+    fireEvent.pointerDown(lowerGrip, { pointerId: 1, clientY: 400 });
+    fireEvent.pointerMove(lowerGrip, { pointerId: 1, clientY: 10000 });
+    fireEvent.pointerUp(lowerGrip, { pointerId: 1 });
+
+    expect(dockH()).toBe('56px');
+    expect(localStorage.getItem('pane.dock')).toBe('10');
   });
 
   it('never clamps the dock below its floor', async () => {

@@ -529,6 +529,14 @@ export function App() {
   // window brings the captain's chosen height back.
   const dockMax = dockMaxFor(windowHeight);
   const dockH = Math.min(Math.max(dockHeight, DOCK_MIN), dockMax);
+  const onDockHeightChange = useCallback(
+    (next: number) => {
+      if (next !== dockH) {
+        setDockHeight(next);
+      }
+    },
+    [dockH, setDockHeight],
+  );
 
   if (picking) {
     return (
@@ -655,7 +663,7 @@ export function App() {
       <Grip
         orientation="horizontal"
         size={dockH}
-        onChange={setDockHeight}
+        onChange={onDockHeightChange}
         side="below"
         min={DOCK_MIN}
         max={dockMax}
