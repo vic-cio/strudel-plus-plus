@@ -1,5 +1,12 @@
 import { Pattern, noteToMidi, valueToMidi } from '@strudel/core';
-import { aliasBank, getSound, registerSound, registerSynthSounds, registerZZFXSounds, samples } from '@strudel/webaudio';
+import {
+  aliasBank,
+  getSound,
+  registerSound,
+  registerSynthSounds,
+  registerZZFXSounds,
+  samples,
+} from '@strudel/webaudio';
 import gm from '@strudel/soundfonts/gm.mjs';
 
 const baseCDN = 'https://strudel.b-cdn.net';
