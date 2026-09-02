@@ -9,6 +9,7 @@ import {
   LEGACY_MIGRATION_DIRECTORY,
   LEGACY_MIGRATION_MARKER,
   LEGACY_MIGRATION_MARKER_CONTENT,
+  LEGACY_MIGRATION_TRANSACTION_MARKER,
   legacySessionsRoots,
   resolveSessionsRoot,
 } from './sessionsRoot';
@@ -163,6 +164,30 @@ describe('legacy session migration', () => {
     await expect(stat(join(defaultSessionsRoot(home), 'partial-set'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(stat(join(session, 'intro.js'))).resolves.toBeTruthy();
     await expect(stat(fifo)).resolves.toBeTruthy();
+  });
+
+  it('recovers a partial published session before retrying migration', async () => {
+    const root = defaultSessionsRoot(home);
+    const legacy = join(home, 'Music', 'Strudel');
+    const source = join(legacy, 'recoverable-set');
+    const destination = join(root, 'recoverable-set');
+    const stage = join(root, '.recoverable-set.migration-stage');
+    await mkdir(source, { recursive: true });
+    await mkdir(destination, { recursive: true });
+    await mkdir(stage, { recursive: true });
+    await writeFile(join(source, 'intro.js'), 'intro');
+    await writeFile(join(stage, 'intro.js'), 'intro');
+    await writeFile(join(destination, 'intro.js'), 'intro');
+    await writeFile(join(destination, LEGACY_MIGRATION_TRANSACTION_MARKER), JSON.stringify({ source, stage }), 'utf8');
+
+    await resolveSessionsRoot({ home });
+
+    await expect(readFile(join(destination, 'intro.js'), 'utf8')).resolves.toBe('intro');
+    await expect(stat(join(destination, LEGACY_MIGRATION_TRANSACTION_MARKER))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(stat(stage)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('is idempotent across repeated startup resolution', async () => {

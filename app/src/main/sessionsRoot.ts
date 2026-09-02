@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   readlink,
+  rename,
   rm,
   rmdir,
   symlink,
@@ -19,6 +20,7 @@ export const DEFAULT_SESSIONS_ROOT_NAME = 'strudel++';
 export const LEGACY_MIGRATION_DIRECTORY = 'legacy-migration';
 export const LEGACY_MIGRATION_MARKER = '.strudel-legacy-archive';
 export const LEGACY_MIGRATION_MARKER_CONTENT = 'strudel++ legacy migration archive\n';
+export const LEGACY_MIGRATION_TRANSACTION_MARKER = '.strudel-migration-transaction.json';
 
 export function defaultSessionsRoot(home: string = homedir()): string {
   return join(home, 'Music', DEFAULT_SESSIONS_ROOT_NAME);
@@ -63,8 +65,19 @@ export async function resolveSessionsRoot(options: SessionsRootOptions = {}): Pr
 }
 
 type EntryKind = 'missing' | 'directory' | 'file' | 'symlink' | 'other';
-type MoveResult = 'moved' | 'collision' | 'missing';
+type MoveResult = 'moved' | 'collision' | 'changed' | 'missing';
 type CopyResult = 'copied' | 'changed' | 'missing';
+
+type EntrySnapshot =
+  | { kind: 'missing' }
+  | { kind: 'file'; content: Buffer }
+  | { kind: 'symlink'; target: string }
+  | { kind: 'directory'; children: ReadonlyMap<string, EntrySnapshot> };
+
+type MigrationTransaction = {
+  source: string;
+  stage: string;
+};
 
 type MigrationConflict = {
   source: string;
@@ -125,11 +138,15 @@ async function migrateLegacyRoots(root: string, legacyRoots: readonly string[]):
   }
 
   if (existingLegacyRoots.length === 0) {
+    if (rootKind === 'directory') {
+      await recoverStaleTransactionsWithReport(root);
+    }
     return;
   }
   if (rootKind === 'missing') {
     await mkdir(root, { recursive: true });
   }
+  await recoverStaleTransactionsWithReport(root);
 
   for (const legacyRoot of existingLegacyRoots) {
     const conflicts: MigrationConflict[] = [];
@@ -222,6 +239,9 @@ async function migrateLegacyEntries(context: MigrationContext, entries: readonly
     if (result === 'moved' || result === 'missing') {
       continue;
     }
+    if (result === 'changed') {
+      throw new Error(`Source changed during migration: ${source}`);
+    }
 
     if (entry.isDirectory() && !entry.name.startsWith('.')) {
       await moveSessionWithUniqueName(context, source, entry.name);
@@ -251,6 +271,9 @@ async function migrateSharedEntry(context: MigrationContext, name: string): Prom
       if (result === 'moved' || result === 'missing') {
         return;
       }
+      if (result === 'changed') {
+        throw new Error(`Source changed during migration: ${source}`);
+      }
       continue;
     }
 
@@ -258,8 +281,7 @@ async function migrateSharedEntry(context: MigrationContext, name: string): Prom
       await mergeDirectory(context, source, destination, name);
       return;
     }
-    if (await entriesEqual(source, destination, sourceKind, destinationKind)) {
-      await removeSource(source, sourceKind);
+    if (await removeMatchingSource(source, destination, destinationKind)) {
       return;
     }
 
@@ -299,6 +321,9 @@ async function mergeDirectory(
       if (result === 'moved' || result === 'missing') {
         continue;
       }
+      if (result === 'changed') {
+        throw new Error(`Source changed during migration: ${sourceChild}`);
+      }
       await archiveConflict(context, sourceChild, childRelativePath);
       continue;
     }
@@ -306,8 +331,7 @@ async function mergeDirectory(
       await mergeDirectory(context, sourceChild, destinationChild, childRelativePath);
       continue;
     }
-    if (await entriesEqual(sourceChild, destinationChild, sourceKind, destinationKind)) {
-      await removeSource(sourceChild, sourceKind);
+    if (await removeMatchingSource(sourceChild, destinationChild, destinationKind)) {
       continue;
     }
     await archiveConflict(context, sourceChild, childRelativePath);
@@ -335,11 +359,24 @@ async function moveSessionWithUniqueName(
     if (result === 'moved' || result === 'missing') {
       return;
     }
+    if (result === 'changed') {
+      throw new Error(`Source changed during migration: ${source}`);
+    }
     attempt += 1;
   }
 }
 
 async function moveEntry(source: string, destination: string): Promise<MoveResult> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await moveEntryOnce(source, destination);
+    if (result !== 'changed') {
+      return result;
+    }
+  }
+  return 'changed';
+}
+
+async function moveEntryOnce(source: string, destination: string): Promise<MoveResult> {
   const sourceKind = await entryKind(source);
   if (sourceKind === 'missing') {
     return 'missing';
@@ -350,29 +387,11 @@ async function moveEntry(source: string, destination: string): Promise<MoveResul
   }
 
   if (sourceKind === 'file') {
-    try {
-      await copyFile(source, destination, constants.COPYFILE_EXCL);
-    } catch (error: unknown) {
-      if (hasCode(error, 'EEXIST')) {
-        return 'collision';
-      }
-      throw error;
-    }
-    if (!(await filesEqual(source, destination))) {
-      return 'collision';
-    }
-    try {
-      await unlink(source);
-    } catch (error: unknown) {
-      if (hasCode(error, 'ENOENT')) {
-        return 'moved';
-      }
-      throw error;
-    }
-    return 'moved';
+    return moveFileEntry(source, destination);
   }
 
   if (sourceKind === 'symlink') {
+    const expected = await snapshotEntry(source);
     const target = await readlink(source);
     try {
       await symlink(target, destination);
@@ -382,13 +401,14 @@ async function moveEntry(source: string, destination: string): Promise<MoveResul
       }
       throw error;
     }
-    try {
-      await unlink(source);
-    } catch (error: unknown) {
-      if (hasCode(error, 'ENOENT')) {
-        return 'moved';
-      }
-      throw error;
+    if (!snapshotsEqual(expected, await snapshotEntry(source))) {
+      await removeOwnedEntry(destination, expected);
+      return 'changed';
+    }
+    const sourceResult = await removeSourceAfterVerification(source, expected);
+    if (sourceResult === 'changed') {
+      await removeOwnedEntry(destination, expected);
+      return 'changed';
     }
     return 'moved';
   }
@@ -396,9 +416,62 @@ async function moveEntry(source: string, destination: string): Promise<MoveResul
   throw new Error(`Cannot migrate unsupported filesystem entry: ${source}`);
 }
 
+async function moveFileEntry(source: string, destination: string): Promise<MoveResult> {
+  if ((await entryKind(destination)) !== 'missing') {
+    return 'collision';
+  }
+  const expected = await snapshotEntry(source);
+  if (expected.kind === 'missing') {
+    return 'missing';
+  }
+  const stage = await createStageFile(destination);
+  try {
+    try {
+      await copyFile(source, stage);
+    } catch (error: unknown) {
+      if (hasCode(error, 'ENOENT')) {
+        return 'missing';
+      }
+      throw error;
+    }
+    const staged = await snapshotEntry(stage);
+    if (!snapshotsEqual(expected, await snapshotEntry(source))) {
+      return 'changed';
+    }
+    try {
+      await copyFile(stage, destination, constants.COPYFILE_EXCL);
+    } catch (error: unknown) {
+      if (hasCode(error, 'EEXIST')) {
+        return 'collision';
+      }
+      throw error;
+    }
+    if (!snapshotsEqual(staged, await snapshotEntry(destination))) {
+      await removeOwnedEntry(destination, staged);
+      return 'changed';
+    }
+    if (!snapshotsEqual(expected, await snapshotEntry(source))) {
+      await removeOwnedEntry(destination, staged);
+      return 'changed';
+    }
+    const sourceResult = await removeSourceAfterVerification(source, expected);
+    if (sourceResult === 'changed') {
+      await removeOwnedEntry(destination, staged);
+      return 'changed';
+    }
+    return 'moved';
+  } finally {
+    await rm(stage, { force: true });
+  }
+}
+
 async function moveDirectoryEntry(source: string, destination: string): Promise<MoveResult> {
   if ((await entryKind(destination)) !== 'missing') {
     return 'collision';
+  }
+  const expected = await snapshotEntry(source);
+  if (expected.kind === 'missing') {
+    return 'missing';
   }
   const stage = await createStageDirectory(destination);
   try {
@@ -407,23 +480,30 @@ async function moveDirectoryEntry(source: string, destination: string): Promise<
       return 'missing';
     }
     if (copied === 'changed') {
-      return 'collision';
+      return 'changed';
     }
-    if ((await entryKind(source)) !== 'directory') {
+    if (!snapshotsEqual(expected, await snapshotEntry(source))) {
+      return 'changed';
+    }
+    if (expected.kind !== 'directory') {
       return 'missing';
     }
 
-    const published = await publishStage(stage, destination);
-    if (published === 'collision') {
-      return 'collision';
+    const published = await publishStage(stage, destination, source);
+    if (published !== 'moved') {
+      return published;
     }
-    if (await entriesEqual(source, destination, 'directory', 'directory')) {
-      await removeTree(source);
-      return 'moved';
+    const sourceResult = await removeSourceAfterVerification(source, expected);
+    if (sourceResult === 'changed') {
+      await rollbackTransaction(destination, stage);
+      return 'changed';
     }
-    return 'collision';
+    await finalizeTransaction(destination, stage);
+    return 'moved';
   } finally {
-    await rm(stage, { recursive: true, force: true });
+    if (!(await hasTransactionMarker(destination))) {
+      await rm(stage, { recursive: true, force: true });
+    }
   }
 }
 
@@ -436,6 +516,26 @@ async function createStageDirectory(destination: string): Promise<string> {
     const stage = join(parent, name);
     try {
       await mkdir(stage);
+      return stage;
+    } catch (error: unknown) {
+      if (hasCode(error, 'EEXIST')) {
+        attempt += 1;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function createStageFile(destination: string): Promise<string> {
+  const parent = dirname(destination);
+  const baseName = `.${basename(destination)}.migration-stage`;
+  let attempt = 1;
+  while (true) {
+    const name = attempt === 1 ? baseName : `${baseName}-${attempt}`;
+    const stage = join(parent, name);
+    try {
+      await writeFile(stage, Buffer.alloc(0), { flag: 'wx' });
       return stage;
     } catch (error: unknown) {
       if (hasCode(error, 'EEXIST')) {
@@ -483,6 +583,7 @@ async function copyEntry(source: string, destination: string): Promise<CopyResul
     return copyDirectoryContents(source, destination);
   }
   if (sourceKind === 'file') {
+    const expected = await snapshotEntry(source);
     try {
       await copyFile(source, destination, constants.COPYFILE_EXCL);
     } catch (error: unknown) {
@@ -491,13 +592,17 @@ async function copyEntry(source: string, destination: string): Promise<CopyResul
       }
       throw error;
     }
+    if (!snapshotsEqual(expected, await snapshotEntry(source))) {
+      return 'changed';
+    }
     return (await filesEqual(source, destination)) ? 'copied' : 'changed';
   }
   if (sourceKind === 'symlink') {
+    const expected = await snapshotEntry(source);
     const target = await readlink(source);
     try {
       await symlink(target, destination);
-      return 'copied';
+      return snapshotsEqual(expected, await snapshotEntry(source)) ? 'copied' : 'changed';
     } catch (error: unknown) {
       if (hasCode(error, 'EEXIST')) {
         return 'changed';
@@ -508,7 +613,7 @@ async function copyEntry(source: string, destination: string): Promise<CopyResul
   throw new Error(`Cannot migrate unsupported filesystem entry: ${source}`);
 }
 
-async function publishStage(stage: string, destination: string): Promise<MoveResult> {
+async function publishStage(stage: string, destination: string, source: string): Promise<MoveResult> {
   try {
     await mkdir(destination);
   } catch (error: unknown) {
@@ -518,47 +623,155 @@ async function publishStage(stage: string, destination: string): Promise<MoveRes
     throw error;
   }
 
-  const published: string[] = [];
-  let collision = false;
+  const marker = join(destination, LEGACY_MIGRATION_TRANSACTION_MARKER);
+  let transactionStarted = false;
   try {
+    await writeFile(marker, JSON.stringify({ source, stage }), { encoding: 'utf8', flag: 'wx' });
+    transactionStarted = true;
     const entries = await readdir(stage, { withFileTypes: true });
+    if (entries.some((entry) => entry.name === LEGACY_MIGRATION_TRANSACTION_MARKER)) {
+      throw new Error(`Cannot migrate an entry named ${LEGACY_MIGRATION_TRANSACTION_MARKER}: ${stage}`);
+    }
     for (const entry of entries) {
-      const result = await moveEntry(join(stage, entry.name), join(destination, entry.name));
-      if (result === 'collision') {
-        collision = true;
-        break;
-      }
-      if (result === 'moved') {
-        published.push(entry.name);
+      const result = await copyEntry(join(stage, entry.name), join(destination, entry.name));
+      if (result !== 'copied') {
+        await rollbackTransaction(destination, stage);
+        return result === 'missing' ? 'changed' : result;
       }
     }
+    if (!(await directoriesEqual(stage, destination, LEGACY_MIGRATION_TRANSACTION_MARKER))) {
+      await rollbackTransaction(destination, stage);
+      return 'changed';
+    }
+    return 'moved';
   } catch (error: unknown) {
-    await rollbackPublished(destination, stage, published);
+    if (transactionStarted) {
+      await rollbackTransaction(destination, stage);
+    } else if ((await readDirectoryEntries(destination)).length === 0) {
+      await rm(destination, { recursive: true, force: true });
+    }
     throw error;
   }
-
-  if (collision) {
-    await rollbackPublished(destination, stage, published);
-    return 'collision';
-  }
-  await rmdir(stage);
-  return 'moved';
 }
 
-async function rollbackPublished(destination: string, stage: string, published: readonly string[]): Promise<void> {
-  for (const name of [...published].reverse()) {
-    const result = await moveEntry(join(destination, name), join(stage, name));
-    if (result === 'collision') {
-      throw new Error(`Could not roll back staged migration entry: ${join(destination, name)}`);
+async function rollbackTransaction(destination: string, stage: string): Promise<void> {
+  if (!(await transactionContainsOnlyStagedContent(destination, stage))) {
+    throw new Error(`Could not safely roll back migration transaction: ${destination}`);
+  }
+  await rm(destination, { recursive: true, force: true });
+  await rm(stage, { recursive: true, force: true });
+}
+
+async function transactionContainsOnlyStagedContent(destination: string, stage: string): Promise<boolean> {
+  const destinationEntries = await readDirectoryEntries(destination);
+  for (const entry of destinationEntries) {
+    if (entry.name === LEGACY_MIGRATION_TRANSACTION_MARKER) {
+      continue;
+    }
+    const stagedPath = join(stage, entry.name);
+    const stagedKind = await entryKind(stagedPath);
+    const destinationPath = join(destination, entry.name);
+    const destinationKind = await entryKind(destinationPath);
+    if (stagedKind === 'missing' || !(await entriesEqual(stagedPath, destinationPath, stagedKind, destinationKind))) {
+      return false;
     }
   }
+  return true;
+}
+
+async function finalizeTransaction(destination: string, stage: string): Promise<void> {
+  if (!(await directoriesEqual(stage, destination, LEGACY_MIGRATION_TRANSACTION_MARKER))) {
+    throw new Error(`Cannot finalize migration transaction: ${destination}`);
+  }
+  await unlink(join(destination, LEGACY_MIGRATION_TRANSACTION_MARKER));
+  await rm(stage, { recursive: true, force: true });
+}
+
+async function hasTransactionMarker(destination: string): Promise<boolean> {
+  return (await entryKind(join(destination, LEGACY_MIGRATION_TRANSACTION_MARKER))) !== 'missing';
+}
+
+async function recoverStaleTransactionsWithReport(root: string): Promise<void> {
   try {
-    await rmdir(destination);
+    await recoverStaleTransactions(root);
   } catch (error: unknown) {
-    if (!hasCode(error, 'ENOENT') && !hasCode(error, 'ENOTEMPTY') && !hasCode(error, 'EEXIST')) {
-      throw error;
+    const recovery = await writeIncompleteMigrationReport(root, root, ['stale migration transaction'], error);
+    throw new Error(`Legacy sessions root migration incomplete. See ${relative(root, recovery)}`);
+  }
+}
+
+async function recoverStaleTransactions(root: string): Promise<void> {
+  for (const marker of await findTransactionMarkers(root)) {
+    const transaction = await readMigrationTransaction(marker);
+    const destination = dirname(marker);
+    const stage = resolve(transaction.stage);
+    if (!isWithin(root, destination) || !isWithin(root, stage)) {
+      throw new Error(`Migration transaction is outside the sessions root: ${marker}`);
+    }
+    await recoverTransaction(destination, stage, resolve(transaction.source));
+  }
+}
+
+async function findTransactionMarkers(path: string): Promise<string[]> {
+  const markers: string[] = [];
+  for (const entry of await readDirectoryEntries(path)) {
+    const child = join(path, entry.name);
+    if (entry.name === LEGACY_MIGRATION_TRANSACTION_MARKER && entry.isFile()) {
+      markers.push(child);
+      continue;
+    }
+    if (entry.isDirectory()) {
+      markers.push(...(await findTransactionMarkers(child)));
     }
   }
+  return markers;
+}
+
+async function readMigrationTransaction(marker: string): Promise<MigrationTransaction> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(marker, 'utf8'));
+  } catch (error: unknown) {
+    throw new Error(`Cannot read migration transaction ${marker}: ${errorMessage(error)}`);
+  }
+  if (!isRecord(parsed) || typeof parsed.source !== 'string' || typeof parsed.stage !== 'string') {
+    throw new Error(`Invalid migration transaction: ${marker}`);
+  }
+  return { source: parsed.source, stage: parsed.stage };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isWithin(root: string, path: string): boolean {
+  const child = relative(root, path);
+  return child === '' || (child !== '..' && !child.startsWith(`..${sep}`) && !child.startsWith(sep));
+}
+
+async function recoverTransaction(destination: string, stage: string, source: string): Promise<void> {
+  if ((await entryKind(stage)) !== 'directory') {
+    throw new Error(`Migration transaction stage is missing: ${stage}`);
+  }
+  if (!(await transactionContainsOnlyStagedContent(destination, stage))) {
+    throw new Error(`Could not safely recover migration transaction: ${destination}`);
+  }
+  if ((await entryKind(source)) === 'missing') {
+    if (!(await directoriesEqual(stage, destination, LEGACY_MIGRATION_TRANSACTION_MARKER))) {
+      throw new Error(`Migration transaction is incomplete: ${destination}`);
+    }
+    try {
+      await unlink(join(destination, LEGACY_MIGRATION_TRANSACTION_MARKER));
+    } catch (error: unknown) {
+      if (!hasCode(error, 'ENOENT')) {
+        throw error;
+      }
+    }
+    await rm(stage, { recursive: true, force: true });
+    return;
+  }
+  await rm(destination, { recursive: true, force: true });
+  await rm(stage, { recursive: true, force: true });
 }
 
 async function entriesEqual(
@@ -579,7 +792,11 @@ async function entriesEqual(
   return false;
 }
 
-async function directoriesEqual(source: string, destination: string): Promise<boolean> {
+async function directoriesEqual(
+  source: string,
+  destination: string,
+  ignoredDestinationName?: string,
+): Promise<boolean> {
   let sourceEntries: Dirent[];
   let destinationEntries: Dirent[];
   try {
@@ -592,6 +809,9 @@ async function directoriesEqual(source: string, destination: string): Promise<bo
       return false;
     }
     throw error;
+  }
+  if (ignoredDestinationName) {
+    destinationEntries = destinationEntries.filter((entry) => entry.name !== ignoredDestinationName);
   }
   if (sourceEntries.length !== destinationEntries.length) {
     return false;
@@ -623,12 +843,127 @@ async function filesEqual(source: string, destination: string): Promise<boolean>
   }
 }
 
-async function removeSource(source: string, kind: EntryKind): Promise<void> {
-  if (kind === 'directory') {
-    await rmdir(source);
-    return;
+async function snapshotEntry(path: string): Promise<EntrySnapshot> {
+  const kind = await entryKind(path);
+  if (kind === 'missing') {
+    return { kind: 'missing' };
   }
-  await unlink(source);
+  if (kind === 'file') {
+    return { kind, content: await readFile(path) };
+  }
+  if (kind === 'symlink') {
+    return { kind, target: await readlink(path) };
+  }
+  if (kind === 'directory') {
+    const children = new Map<string, EntrySnapshot>();
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      children.set(entry.name, await snapshotEntry(join(path, entry.name)));
+    }
+    return { kind, children };
+  }
+  throw new Error(`Cannot snapshot unsupported filesystem entry: ${path}`);
+}
+
+function snapshotsEqual(left: EntrySnapshot, right: EntrySnapshot): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === 'missing' || right.kind === 'missing') {
+    return true;
+  }
+  if (left.kind === 'file' && right.kind === 'file') {
+    return left.content.equals(right.content);
+  }
+  if (left.kind === 'symlink' && right.kind === 'symlink') {
+    return left.target === right.target;
+  }
+  if (left.kind === 'directory' && right.kind === 'directory') {
+    if (left.children.size !== right.children.size) {
+      return false;
+    }
+    for (const [name, child] of left.children) {
+      const other = right.children.get(name);
+      if (!other || !snapshotsEqual(child, other)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+async function removeOwnedEntry(path: string, expected: EntrySnapshot): Promise<void> {
+  if (!snapshotsEqual(expected, await snapshotEntry(path))) {
+    throw new Error(`Cannot remove changed migration destination: ${path}`);
+  }
+  await removeTree(path);
+}
+
+async function removeMatchingSource(source: string, destination: string, destinationKind: EntryKind): Promise<boolean> {
+  const expected = await snapshotEntry(source);
+  if (expected.kind === 'missing') {
+    return true;
+  }
+  if (!snapshotsEqual(expected, await snapshotEntry(source))) {
+    throw new Error(`Source changed during migration: ${source}`);
+  }
+  if (!(await entriesEqual(source, destination, expected.kind, destinationKind))) {
+    return false;
+  }
+  if (!snapshotsEqual(expected, await snapshotEntry(source))) {
+    throw new Error(`Source changed during migration: ${source}`);
+  }
+  const sourceResult = await removeSourceAfterVerification(source, expected);
+  if (sourceResult === 'changed') {
+    throw new Error(`Source changed during migration: ${source}`);
+  }
+  return true;
+}
+
+async function removeSourceAfterVerification(
+  source: string,
+  expected: EntrySnapshot,
+): Promise<'moved' | 'changed' | 'missing'> {
+  const claim = await claimSource(source);
+  if (!claim) {
+    return 'missing';
+  }
+  if (!snapshotsEqual(expected, await snapshotEntry(claim))) {
+    if ((await entryKind(source)) === 'missing') {
+      await rename(claim, source);
+    } else {
+      throw new Error(`Source changed during migration and was preserved at ${claim}`);
+    }
+    return 'changed';
+  }
+  await removeTree(claim);
+  return 'moved';
+}
+
+async function claimSource(source: string): Promise<string | undefined> {
+  if ((await entryKind(source)) === 'missing') {
+    return undefined;
+  }
+  const parent = dirname(source);
+  const baseName = `.${basename(source)}.migration-source`;
+  let attempt = 1;
+  while (true) {
+    const name = attempt === 1 ? baseName : `${baseName}-${attempt}`;
+    const claim = join(parent, name);
+    try {
+      await rename(source, claim);
+      return claim;
+    } catch (error: unknown) {
+      if (hasCode(error, 'EEXIST')) {
+        attempt += 1;
+        continue;
+      }
+      if (hasCode(error, 'ENOENT') && (await entryKind(source)) === 'missing') {
+        return undefined;
+      }
+      throw error;
+    }
+  }
 }
 
 async function removeTree(path: string): Promise<void> {
@@ -671,6 +1006,9 @@ async function archiveConflict(context: MigrationContext, source: string, relati
     }
     if (result === 'missing') {
       return;
+    }
+    if (result === 'changed') {
+      throw new Error(`Source changed during migration: ${source}`);
     }
     attempt += 1;
   }
