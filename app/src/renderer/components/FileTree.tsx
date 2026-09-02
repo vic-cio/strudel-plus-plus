@@ -13,7 +13,7 @@ type BeatInput = BeatSummary | string;
 type Props = {
   beats: BeatInput[];
   open: string | undefined;
-  dirty: boolean;
+  dirtyByBeat: Readonly<Record<string, boolean>>;
   error: string | undefined;
   sortMode: BeatSortMode;
   manualOrder: string[];
@@ -37,7 +37,7 @@ type Props = {
 export function FileTree({
   beats,
   open,
-  dirty,
+  dirtyByBeat,
   error,
   sortMode = DEFAULT_BEAT_SORT,
   manualOrder = [],
@@ -180,7 +180,7 @@ export function FileTree({
                 aria-label={name}
                 aria-current={name === open}
                 aria-keyshortcuts={sortMode === 'manual' ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
-                data-dirty={name === open && dirty}
+                data-dirty={dirtyByBeat[name] ? 'true' : undefined}
                 title={sortMode === 'manual' ? 'Alt+ArrowUp/Down to reorder' : undefined}
                 onKeyDown={(event) => {
                   if (sortMode !== 'manual' || !event.altKey) {

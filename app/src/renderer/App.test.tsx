@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { App } from './App';
@@ -10,7 +10,7 @@ import { App } from './App';
  * follow the EDIT buffer at the moment it moves, because a harness reads that
  * pointer from .session.json and edits exactly what it names.
  */
-const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
+const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(() => {
   type WrittenState = { beat?: string | null; cpsByBeat?: Record<string, number>; dock?: unknown };
   const setStateMock = vi.fn(async (_session: string, _state: WrittenState) => {});
   // The watcher handler is captured so tests can play harness: write to disk,
@@ -31,11 +31,13 @@ const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
     toggle: vi.fn(),
     evaluate: vi.fn(),
     reevaluate: vi.fn(),
+    getCode: vi.fn(() => undefined),
     containerRef: { current: null },
     cps: 0.5,
     changeCps: vi.fn(),
     releaseCps: vi.fn(),
   };
+  const codeChange: { current: ((code: string) => void) | undefined } = { current: undefined };
   const desktop = {
     sessions: {
       root: vi.fn(async () => '/sessions-root'),
@@ -78,13 +80,16 @@ const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
       onExit: vi.fn(() => () => {}),
     },
   };
-  return { desktop, setStateMock, changeHandler, repl };
+  return { desktop, setStateMock, changeHandler, repl, codeChange };
 });
 
 vi.mock('./desktop', () => ({ desktop }));
 
 vi.mock('./useStrudel', () => ({
-  useStrudel: () => repl,
+  useStrudel: (onCodeChange: (code: string) => void) => {
+    codeChange.current = onCodeChange;
+    return repl;
+  },
 }));
 
 vi.mock('./liveSnapshot', () => ({
@@ -134,6 +139,7 @@ beforeEach(() => {
   desktop.beats.read.mockImplementation(async (name: string) => `// ${name}`);
   desktop.beats.remove.mockClear();
   changeHandler.current = undefined;
+  codeChange.current = undefined;
   repl.state = { started: false, error: undefined };
   repl.clearError.mockClear();
   repl.setCode.mockClear();
@@ -253,6 +259,80 @@ describe('App session state', () => {
       const maps = setStateMock.mock.calls.filter((call) => 'cpsByBeat' in call[1]);
       expect(maps.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe('App beat drafts', () => {
+  async function editCurrentBeat(content: string): Promise<void> {
+    await act(async () => {
+      codeChange.current?.(content);
+    });
+  }
+
+  it('keeps an unsaved draft and its dirty dot when switching beats', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+
+    const first = screen.getByRole('button', { name: 'we begin.js' });
+    await waitFor(() => expect(first.getAttribute('data-dirty')).toBe('true'));
+
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('808ing.js'));
+    expect(first.getAttribute('data-dirty')).toBe('true');
+    expect(screen.getByRole('button', { name: '808ing.js' }).getAttribute('data-dirty')).toBeNull();
+
+    await user.click(first);
+    await waitFor(() => expect(repl.setCode).toHaveBeenLastCalledWith('// draft for we begin'));
+  });
+
+  it('Cmd+S writes only the focused draft and clears only that dirty state', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    await editCurrentBeat('// draft for 808ing');
+    desktop.beats.write.mockClear();
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+
+    await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('808ing.js', '// draft for 808ing'));
+    expect(screen.getByRole('button', { name: '808ing.js' }).getAttribute('data-dirty')).toBeNull();
+    expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true');
+  });
+
+  it('warns on close when an inactive beat still has a dirty draft', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
+    );
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('starts with no drafts after the renderer is restarted', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft discarded on restart');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
+    );
+
+    cleanup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBeNull();
   });
 });
 

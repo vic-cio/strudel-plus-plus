@@ -140,6 +140,9 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     editorRef.current?.setCode(code);
   }, []);
 
+  /** Read the editor synchronously when an action moves focus to another beat. */
+  const getCode = useCallback(() => editorRef.current?.code, []);
+
   /** Drop a stale REPL error. The editor only clears its error on the next
    * evaluation, so adopting another beat while stopped would otherwise keep
    * showing the previous beat's parse failure as if it were this one's. */
@@ -212,6 +215,7 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     containerRef,
     state,
     setCode,
+    getCode,
     clearError,
     toggle,
     evaluate,
