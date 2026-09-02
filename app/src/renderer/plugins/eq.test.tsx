@@ -3,6 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EqSpectrum } from './eq';
 import { masterAnalyser } from '../installTap';
+import { onRendererError } from '../reportErrors';
 
 vi.mock('../installTap', () => ({ masterAnalyser: vi.fn(() => undefined) }));
 
@@ -121,6 +122,65 @@ describe('EqSpectrum', () => {
     const lastId = nextId;
     unmount();
     expect(vi.mocked(cancelAnimationFrame)).toHaveBeenCalledWith(lastId);
+  });
+
+  it('keeps the loop alive across a throwing frame and reports it once', () => {
+    // clearRect stands in for anything drawFrame might throw on — a detached
+    // analyser, a malformed read. Every frame fails the same way here, which
+    // is the case that used to spam the status bar once per frame.
+    const ctx = stubContext();
+    ctx.clearRect.mockImplementation(() => {
+      throw new Error('boom in drawFrame');
+    });
+    const seen: string[] = [];
+    const unsubscribe = onRendererError((message) => seen.push(message));
+
+    render(<EqSpectrum {...baseProps} playing={true} />);
+    runFrames(3);
+
+    // The loop re-arms after every failure instead of dying on the first one.
+    expect(queued).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('boom in drawFrame');
+
+    unsubscribe();
+  });
+
+  it('reports a new failure again once the error changes', () => {
+    const ctx = stubContext();
+    let call = 0;
+    ctx.clearRect.mockImplementation(() => {
+      call += 1;
+      throw new Error(call === 1 ? 'first failure' : 'second failure');
+    });
+    const seen: string[] = [];
+    const unsubscribe = onRendererError((message) => seen.push(message));
+
+    render(<EqSpectrum {...baseProps} playing={true} />);
+    runFrames(2);
+
+    expect(seen).toEqual([expect.stringContaining('first failure'), expect.stringContaining('second failure')]);
+    expect(queued).toHaveLength(1);
+
+    unsubscribe();
+  });
+
+  it('recovers the bars once a throwing frame is followed by a good one', () => {
+    const ctx = stubContext();
+    masterAnalyserMock.mockReturnValue(fakeAnalyser([200]));
+    ctx.clearRect.mockImplementationOnce(() => {
+      throw new Error('one bad frame');
+    });
+    const unsubscribe = onRendererError(() => {});
+
+    render(<EqSpectrum {...baseProps} playing={true} />);
+    runFrames(1); // throws, but reschedules
+    expect(queued).toHaveLength(1);
+    runFrames(1); // draws normally
+    expect(ctx.fillRect).toHaveBeenCalled();
+    expect(queued).toHaveLength(1);
+
+    unsubscribe();
   });
 
   it('wakes and idles as playback toggles', () => {

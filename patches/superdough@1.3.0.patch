@@ -1,0 +1,30 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index da81977b3a8f9cb8af08440c61990437041f69b7..d1d8fb4a609ae591e27d25325e249534917c5c24 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -2238,7 +2238,7 @@ function uc() {
+ const Tt = 2 * Math.PI;
+ function Fo(e, t, n) {
+   e = typeof e == "object" ? e : new Float32Array(e).fill(1);
+-  const a = e.length, c = new Float32Array(a + 1), s = new Float32Array(a + 1), d = z(), l = d.createOscillator(), i = {
++  const a = e.length, d = z(), l = d.createOscillator(), i = {
+     sawtooth: (r) => [0, -1 / r],
+     square: (r) => [0, r % 2 === 0 ? 0 : 1 / r],
+     triangle: (r) => [r % 2 === 0 ? 0 : 1 / (r * r), 0],
+@@ -2246,6 +2246,16 @@ function Fo(e, t, n) {
+   };
+   if (!i[n])
+     throw new Error(`unknown wave type ${n}`);
++  if (a === 0) {
++    // A caller-supplied partial count truncates to zero for any n/partials
++    // strictly between 0 and 1 (new Float32Array(0.5) has length 0), which
++    // would otherwise reach createPeriodicWave with a 1-length real/imag
++    // pair and throw "The length of the real array provided (1) is less
++    // than 2". There are no harmonics to build a custom wave from, so fall
++    // back to the plain waveform instead of dropping the note.
++    return l.type = n === "user" ? "triangle" : n, l;
++  }
++  const c = new Float32Array(a + 1), s = new Float32Array(a + 1);
+   for (let r = 0; r < a; r++) {
+     const h = e[r], [u, m] = i[n](r + 1), G = t?.[r] ?? 0;
+     let b = u * h, f = m * h;
