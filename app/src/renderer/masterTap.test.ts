@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { installMasterTap } from './masterTap';
+import { installMasterTap, selectLiveTap } from './masterTap';
 
 class FakeDestination {
   constructor(public context: object) {}
@@ -112,5 +112,71 @@ describe('installMasterTap', () => {
     };
     const first = installMasterTap(deps);
     expect(installMasterTap(deps)).toBe(first);
+  });
+});
+
+describe('selectLiveTap', () => {
+  it('returns the tap for a running context', () => {
+    const running = { state: 'running' };
+    const analyser = { id: 'a' };
+    const taps = new Map<object, object>([[running, analyser]]);
+    expect(selectLiveTap(taps)).toBe(analyser);
+  });
+
+  it('prefers a running context over one inserted later', () => {
+    // A throwaway OfflineAudioContext (a bounce, a reverb impulse-response
+    // render) connects to its own destination and gets tapped after the
+    // real, live context. "Last inserted" must not win over "actually live".
+    const live = { state: 'running' };
+    const offline = { state: 'closed' };
+    const liveAnalyser = { id: 'live' };
+    const offlineAnalyser = { id: 'offline' };
+    const taps = new Map<object, object>([
+      [live, liveAnalyser],
+      [offline, offlineAnalyser],
+    ]);
+    expect(selectLiveTap(taps)).toBe(liveAnalyser);
+  });
+
+  it('prunes a closed context out of the map', () => {
+    const live = { state: 'running' };
+    const offline = { state: 'closed' };
+    const taps = new Map<object, object>([
+      [live, { id: 'live' }],
+      [offline, { id: 'offline' }],
+    ]);
+    selectLiveTap(taps);
+    expect(taps.has(offline)).toBe(false);
+    expect(taps.has(live)).toBe(true);
+  });
+
+  it('falls back to a suspended context when nothing is running', () => {
+    const suspended = { state: 'suspended', resume: vi.fn() };
+    const analyser = { id: 'suspended' };
+    const taps = new Map<object, object>([[suspended, analyser]]);
+    expect(selectLiveTap(taps)).toBe(analyser);
+  });
+
+  it('resumes a suspended context it falls back to', () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    const suspended = { state: 'suspended', resume };
+    const taps = new Map<object, object>([[suspended, { id: 'suspended' }]]);
+    selectLiveTap(taps);
+    expect(resume).toHaveBeenCalled();
+  });
+
+  it('does not throw when a suspended context has no resume method', () => {
+    const suspended = { state: 'suspended' };
+    const taps = new Map<object, object>([[suspended, { id: 'suspended' }]]);
+    expect(() => selectLiveTap(taps)).not.toThrow();
+  });
+
+  it('returns undefined for an empty map', () => {
+    expect(selectLiveTap(new Map())).toBeUndefined();
+  });
+
+  it('returns undefined when every context is closed', () => {
+    const taps = new Map<object, object>([[{ state: 'closed' }, { id: 'a' }]]);
+    expect(selectLiveTap(taps)).toBeUndefined();
   });
 });
