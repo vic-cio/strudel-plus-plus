@@ -110,6 +110,7 @@ export function useStrudel(onCodeChange: (code: string) => void) {
       });
       editor.setTheme('deadeye');
       activateTheme('deadeye');
+      editor.reconfigureExtension('isTabIndentationEnabled', true);
       editor.setFontFamily(getComputedStyle(document.body).fontFamily);
       editorRef.current = editor;
       // StrudelMirror mirrors every keystroke onto `.code`, but gives no callback

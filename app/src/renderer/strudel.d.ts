@@ -12,6 +12,7 @@ declare module '@strudel/codemirror' {
     toggle(): Promise<void>;
     stop(): Promise<void>;
     clear(): void;
+    reconfigureExtension(name: string, value: unknown): void;
   }
   export const themes: Record<string, unknown>;
   export const settings: Record<string, unknown>;

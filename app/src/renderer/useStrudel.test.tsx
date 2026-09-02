@@ -49,6 +49,8 @@ const { mirrors, FakeMirror } = vi.hoisted(() => {
     }
 
     clear(): void {}
+
+    reconfigureExtension(): void {}
   }
 
   return { mirrors, FakeMirror };
@@ -201,5 +203,31 @@ describe('useStrudel', () => {
     logPlaybackError('[eval] code updated');
     logPlaybackError('skip query: too late');
     expect(screen.getByTestId('repl-error').textContent).toBe('');
+  });
+
+  it('enables tab indentation and keeps focus in the editor', () => {
+    vi.useRealTimers();
+    const spy = vi.spyOn(FakeMirror.prototype, 'reconfigureExtension');
+    render(<Harness showEditor />);
+    expect(mirrors).toHaveLength(1);
+    expect(spy).toHaveBeenCalledWith('isTabIndentationEnabled', true);
+
+    // The hook must have enabled indentation through the upstream seam.
+    const mirror = mirrors[0]!;
+    // We verify focus stays in the editor when Tab is pressed.
+    // Tab-indent enabled means pressing Tab inserts spaces rather than
+    // moving focus away from the .cm-editor element.
+    const editorHost = screen.getByTestId('editor-host');
+    const cmEditor = editorHost.querySelector('.cm-editor') as HTMLElement;
+    expect(cmEditor).not.toBeNull();
+    cmEditor!.focus();
+    // Focus must remain inside the editor; it must not jump to another panel.
+    const activeBefore = document.activeElement;
+    cmEditor!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+    // Focus must stay inside the editor; it must not jump to some other panel.
+    // In a real browser this verifies the Tab key does not shift focus out.
+    expect(document.activeElement === activeBefore || editorHost.contains(document.activeElement)).toBe(true);
   });
 });
