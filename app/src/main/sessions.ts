@@ -22,6 +22,7 @@ type StoredState = SessionState & { usedAt?: number };
 
 export type SessionStore = {
   list(): Promise<Session[]>;
+  has(name: string): Promise<boolean>;
   create(name: string): Promise<void>;
   remove(name: string): Promise<void>;
   touch(name: string): Promise<void>;
@@ -166,6 +167,10 @@ export function createSessionStore(root: string): SessionStore {
           }),
       );
       return sessions.sort((a, b) => b.usedAt - a.usedAt);
+    },
+
+    async has(name) {
+      return exists(locate(name));
     },
 
     async create(name) {

@@ -18,6 +18,7 @@ const beatStoreFactory = vi.fn(() => ({
 }));
 
 const sessionsTouch = vi.fn(async () => undefined);
+const sessionsHas = vi.fn(async () => true);
 const sessionsRemove = vi.fn(async () => undefined);
 const watcherClose = vi.fn(async () => undefined);
 const watchBeatsMock = vi.fn(() => ({ close: watcherClose }));
@@ -60,6 +61,7 @@ vi.mock('./oscSender', () => ({ createOscSender: () => ({ send: vi.fn(), close: 
 vi.mock('./sessions', () => ({
   createSessionStore: () => ({
     list: vi.fn(async () => []),
+    has: sessionsHas,
     create: vi.fn(async () => undefined),
     remove: sessionsRemove,
     touch: sessionsTouch,
@@ -79,6 +81,8 @@ describe('openSession', () => {
     process.env.STRUDEL_BEATS_DIR = '/tmp/strudel-index-test-root';
     ptyStart.mockReset();
     ptyStart.mockReturnValue({ write: vi.fn(), resize: vi.fn(), kill: vi.fn() });
+    sessionsHas.mockReset();
+    sessionsHas.mockResolvedValue(true);
     sessionsRemove.mockReset();
     vi.resetModules();
     const mod = await import('./index');
@@ -174,5 +178,41 @@ describe('openSession', () => {
     await sessionsRemovePromise;
     await sessionsOpenPromise;
     expect(sessionsTouch).toHaveBeenCalledWith('candidate-session');
+  });
+
+  it('does not restart the harness when a queued open targets a deleted session', async () => {
+    const ptyStartHandler = handlers.get(CH.ptyStart)!;
+    await ptyStartHandler({}, 'shell', 80, 24);
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    ptyKill.mockClear();
+    sessionsHas.mockClear();
+    sessionsTouch.mockClear();
+
+    let removalStarted!: () => void;
+    let releaseRemoval!: () => void;
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    sessionsRemove.mockImplementationOnce(async () => {
+      removalStarted();
+      await released;
+      sessionsHas.mockResolvedValue(false);
+    });
+
+    const sessionsRemovePromise = handlers.get(CH.sessionsRemove)!({}, 'candidate-session');
+    await started;
+    const sessionsOpenPromise = sessionsOpenHandler({}, 'candidate-session');
+    releaseRemoval();
+
+    await sessionsRemovePromise;
+    await expect(sessionsOpenPromise).rejects.toThrow(/missing session/i);
+    expect(ptyKill).not.toHaveBeenCalled();
+    expect(sessionsTouch).not.toHaveBeenCalled();
+    const activeHandler = handlers.get(CH.sessionsActive)!;
+    expect(await activeHandler({})).toBe('active-session');
   });
 });

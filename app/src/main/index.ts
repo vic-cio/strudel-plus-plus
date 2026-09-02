@@ -246,6 +246,9 @@ async function main() {
   ipcMain.handle(CH.midiPorts, () => midi.ports());
 
   async function openSession(name: string) {
+    if (!(await sessions.has(name))) {
+      throw new Error(`Cannot open missing session: ${name}`);
+    }
     const folder = join(root, name);
     const previousBeatsRoot = config.beatsRoot;
     config.beatsRoot = folder;
