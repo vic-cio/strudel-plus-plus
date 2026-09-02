@@ -3,6 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import { BEAT_EXTENSION } from '../shared/beatName';
 import { isBeatSortMode, type BeatSortMode } from '../shared/beatSorting';
 import { isDockState, type DockState } from '../shared/dockState';
+import { DEFAULT_SESSION_BEATS, DEFAULT_SESSION_NAME, DEFAULT_SESSION_STATE } from './defaultSession';
 import { seedHarnessContent } from './harnessContent';
 
 export type Session = { name: string; beats: number; usedAt: number };
@@ -75,6 +76,33 @@ async function linkSharedPath(root: string, sessionPath: string, name: string): 
   }
 }
 
+/**
+ * Seed the one example session into a brand-new sessions root.
+ *
+ * Fires only when the root has no session folder at all — a genuinely fresh
+ * root, first launch or a fresh STRUDEL_BEATS_DIR — so a root the user has
+ * already put sessions into is never touched, duplicated, or overwritten.
+ * Failures are swallowed like seedHarnessContent's: the example session is a
+ * convenience, never a reason to refuse to open.
+ */
+async function seedDefaultSession(base: string): Promise<void> {
+  try {
+    const entries = await readdir(base, { withFileTypes: true });
+    if (entries.some((entry) => entry.isDirectory() && !entry.name.startsWith('.'))) {
+      return;
+    }
+    const full = join(base, DEFAULT_SESSION_NAME);
+    await mkdir(full, { recursive: true });
+    for (const [name, content] of Object.entries(DEFAULT_SESSION_BEATS)) {
+      await writeFile(join(full, name), content, 'utf8');
+    }
+    await write(full, { ...DEFAULT_SESSION_STATE, usedAt: nextUsedAt() });
+    await linkShared(base, full);
+  } catch {
+    // Seeding is a convenience. A root it could not reach still works.
+  }
+}
+
 export const STARTER_BEAT = `// a new beat
 setcps(0.5)
 
@@ -115,8 +143,10 @@ export function createSessionStore(root: string): SessionStore {
     async list() {
       await mkdir(base, { recursive: true });
       // The first thing the app asks the store for is this list, so it is
-      // also the moment a fresh root gets its default AGENTS.md and skills.
+      // also the moment a fresh root gets its default AGENTS.md and skills,
+      // and — only when it has no sessions of its own yet — the example one.
       await seedHarnessContent(base);
+      await seedDefaultSession(base);
       const entries = await readdir(base, { withFileTypes: true });
       const sessions = await Promise.all(
         entries

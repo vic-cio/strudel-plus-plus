@@ -1,0 +1,29 @@
+{
+  "beat": "808ing.js",
+  "cpsByBeat": {
+    "we begin.js": 0.5,
+    "808ing.js": 0.5,
+    "melody >:).js": 0.5
+  },
+  "beatSort": "manual",
+  "manualBeatOrder": [
+    "we begin.js",
+    "808ing.js",
+    "melody >:).js"
+  ],
+  "dock": {
+    "split": true,
+    "panes": [
+      {
+        "tabs": [
+          "eq"
+        ],
+        "active": "eq"
+      },
+      {
+        "tabs": []
+      }
+    ]
+  },
+  "usedAt": 1788341589695
+}
