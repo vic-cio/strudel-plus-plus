@@ -43,6 +43,15 @@ export function onRendererError(listener: ErrorListener): () => void {
   };
 }
 
+/** Land a failure in the error surface from inside the renderer itself — a
+ * caught exception that never becomes an `unhandledrejection`/`error` event,
+ * such as one a self-healing loop (the EQ's rAF chain) swallows to keep
+ * running. */
+export function reportError(reason: unknown, source = 'renderer'): void {
+  console.error(`[${source}]`, describe(reason));
+  emit(`unexpected failure: ${describe(reason).split('\n')[0]}`);
+}
+
 let installed = false;
 
 export function reportErrors() {
@@ -50,13 +59,6 @@ export function reportErrors() {
     return; // The window listeners are global state; installing twice stacks duplicates.
   }
   installed = true;
-  window.addEventListener('unhandledrejection', (event) => {
-    const reason = event.reason;
-    console.error('[unhandled rejection]', describe(reason));
-    emit(`unexpected failure: ${describe(reason).split('\n')[0]}`);
-  });
-  window.addEventListener('error', (event) => {
-    console.error('[uncaught]', event.error?.stack ?? event.message);
-    emit(`unexpected failure: ${event.error?.message ?? event.message}`);
-  });
+  window.addEventListener('unhandledrejection', (event) => reportError(event.reason, 'unhandled rejection'));
+  window.addEventListener('error', (event) => reportError(event.error ?? event.message, 'uncaught'));
 }

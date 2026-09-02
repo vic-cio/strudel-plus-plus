@@ -67,3 +67,11 @@ declare module 'vite-plugin-bundle-audioworklet' {
   const bundleAudioWorklet: () => unknown;
   export default bundleAudioWorklet;
 }
+// @strudel/webaudio re-exports superdough, but only the names it uses itself;
+// the patch regression test (superdoughPatch.test.ts) reaches the package
+// directly for the oscillator engine's own exports.
+declare module 'superdough' {
+  export function getAudioContext(): AudioContext;
+  export function setAudioContext(context: AudioContext): AudioContext;
+  export function waveformN(partials: number | number[], phases: number[] | undefined, type: string): OscillatorNode;
+}

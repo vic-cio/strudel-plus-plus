@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { masterAnalyser } from '../installTap';
+import { reportError } from '../reportErrors';
 import { registerPlugin } from './registry';
 import type { PluginProps } from './registry';
 
@@ -133,8 +134,23 @@ export function EqSpectrum({ playing }: PluginProps) {
       return;
     }
     const peaks = new Float32Array(BAR_COUNT);
+    // A bad frame (a detached analyser, a malformed read) must not end the
+    // loop: the next requestAnimationFrame call sits after drawFrame, so an
+    // uncaught throw here used to leave the bars frozen mid-air for the rest
+    // of playback. Catch per frame, keep scheduling either way, and report
+    // only the first occurrence of a given failure so a repeating error
+    // doesn't spam the status bar every frame.
+    let lastError: string | undefined;
     let raf = requestAnimationFrame(function frame() {
-      drawFrame(canvas, peaks);
+      try {
+        drawFrame(canvas, peaks);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message !== lastError) {
+          lastError = message;
+          reportError(error, 'eq');
+        }
+      }
       raf = requestAnimationFrame(frame);
     });
     return () => cancelAnimationFrame(raf);
