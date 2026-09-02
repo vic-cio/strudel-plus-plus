@@ -17,6 +17,7 @@ function setup(overrides: Partial<Parameters<typeof FileTree>[0]> = {}) {
     onCreate: vi.fn(),
     onRename: vi.fn(),
     onRemove: vi.fn(),
+    onClone: vi.fn(),
     onDismissError: vi.fn(),
     sortMode: 'chronological' as const,
     manualOrder: [],
@@ -29,31 +30,32 @@ function setup(overrides: Partial<Parameters<typeof FileTree>[0]> = {}) {
 }
 
 describe('FileTree', () => {
-  it('opens a naming row when new beat is clicked', async () => {
-    // The whole point of this file. Twice now the sidebar has shipped with
-    // these two buttons doing nothing at all, and neither time could it be
-    // caught without a person clicking them.
+  it('opens a naming row from the row context menu', async () => {
     const { user } = setup();
-    await user.click(screen.getByTitle('New beat'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }), { clientX: 100, clientY: 100 });
+    await user.click(screen.getByRole('menuitem', { name: 'add new beat' }));
     expect(screen.getByPlaceholderText('name')).toBeDefined();
   });
 
   it('reports the typed name when the naming row is confirmed', async () => {
     const { props, user } = setup();
-    await user.click(screen.getByTitle('New beat'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'add new beat' }));
     await user.type(screen.getByPlaceholderText('name'), 'breakbeat{Enter}');
     expect(props.onCreate).toHaveBeenCalledWith('breakbeat');
   });
 
   it('prefills the rename row with the open beat, without its extension', async () => {
     const { user } = setup();
-    await user.click(screen.getByTitle('Rename'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
     expect(screen.getByPlaceholderText('name')).toHaveProperty('value', 'canary');
   });
 
   it('reports a rename with the old and the new name', async () => {
     const { props, user } = setup();
-    await user.click(screen.getByTitle('Rename'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
     const input = screen.getByPlaceholderText('name');
     await user.clear(input);
     await user.type(input, 'renamed{Enter}');
@@ -62,14 +64,16 @@ describe('FileTree', () => {
 
   it('does not report a rename that changed nothing', async () => {
     const { props, user } = setup();
-    await user.click(screen.getByTitle('Rename'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
     await user.type(screen.getByPlaceholderText('name'), '{Enter}');
     expect(props.onRename).not.toHaveBeenCalled();
   });
 
   it('abandons the naming row on escape', async () => {
     const { props, user } = setup();
-    await user.click(screen.getByTitle('New beat'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'add new beat' }));
     await user.type(screen.getByPlaceholderText('name'), 'nope{Escape}');
     expect(props.onCreate).not.toHaveBeenCalled();
     expect(screen.queryByPlaceholderText('name')).toBeNull();
@@ -77,7 +81,8 @@ describe('FileTree', () => {
 
   it('asks before deleting, and deletes once confirmed', async () => {
     const { props, user } = setup();
-    await user.click(screen.getByTitle('Delete'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
     expect(props.onRemove).not.toHaveBeenCalled();
     await user.click(screen.getByText('delete'));
     expect(props.onRemove).toHaveBeenCalledWith('canary.js');
@@ -85,7 +90,8 @@ describe('FileTree', () => {
 
   it('keeps the beat when the deletion is declined', async () => {
     const { props, user } = setup();
-    await user.click(screen.getByTitle('Delete'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
     await user.click(screen.getByText('keep'));
     expect(props.onRemove).not.toHaveBeenCalled();
   });
@@ -93,11 +99,50 @@ describe('FileTree', () => {
   it('renders the delete confirmation directly below the beat it belongs to', async () => {
     const { user } = setup({ beats: ['first.js', 'canary.js', 'last.js'] });
 
-    await user.click(screen.getByTitle('Delete'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'canary.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
 
     const beat = screen.getByRole('button', { name: /canary/ });
     const confirmation = screen.getByText('delete canary?').closest('.tree-confirm');
     expect(confirmation?.previousElementSibling).toBe(beat);
+  });
+
+  it('clones the row selected in the context menu', async () => {
+    const { props, user } = setup({ beats: ['canary.js', 'other.js'] });
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'other.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'clone' }));
+
+    expect(props.onClone).toHaveBeenCalledWith('other.js');
+  });
+
+  it('supports the approved beat shortcuts', async () => {
+    const { user } = setup();
+
+    fireEvent.keyDown(window, { key: 'n', metaKey: true });
+    expect(screen.getByPlaceholderText('name')).toBeDefined();
+
+    await user.keyboard('{Escape}');
+    fireEvent.keyDown(window, { key: 'F2' });
+    expect(screen.getByPlaceholderText('name')).toHaveProperty('value', 'canary');
+
+    await user.keyboard('{Escape}');
+    fireEvent.keyDown(window, { key: 'Backspace', metaKey: true });
+    expect(screen.getByText('delete canary?')).toBeDefined();
+  });
+
+  it('dismisses the context menu on Escape and outside pointer input', async () => {
+    const { user } = setup();
+    const beat = screen.getByRole('button', { name: 'canary.js' });
+
+    fireEvent.contextMenu(beat);
+    expect(screen.getByRole('menu')).toBeDefined();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    fireEvent.contextMenu(beat);
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   it('offers the three beat sort modes with chronological order as the default', () => {

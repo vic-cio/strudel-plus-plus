@@ -16,6 +16,7 @@ import { normalizeBeatName } from '../shared/beatName';
 import { DEFAULT_BEAT_SORT, moveBeat, sortBeats, type BeatSortMode, type BeatSummary } from '../shared/beatSorting';
 import { nextCloneName } from '../shared/cloneName';
 import { handoffClonedBeat } from '../shared/cloneHandoff';
+import { STARTER_BEAT } from '../shared/starterBeat';
 import { resolveDiskChange } from '../shared/sync';
 import { clampCps, hasCodedTempo } from '../shared/tempo';
 import { normalizeDockState, type DockState } from '../shared/dockState';
@@ -51,8 +52,6 @@ const DOCK_DEFAULT = 104;
 const DOCK_CHROME = 34 + 5 + 22 + 160;
 
 const dockMaxFor = (windowHeight: number) => Math.max(DOCK_MIN, windowHeight - DOCK_CHROME);
-
-const STARTER = `// a new beat\nsetcps(0.5)\n\nstack(\n  s("bd*2, ~ sd"),\n  s("hh*8").gain(0.4),\n)\n`;
 
 function sameOrder(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((name, index) => name === right[index]);
@@ -330,15 +329,19 @@ export function App() {
     [adopt, reevaluate],
   );
 
-  /** Clone the open beat and move to the copy, without interrupting the sound. */
+  /** Clone a beat and move to the copy, without interrupting the sound. */
   const cloneBeat = useCallback(
-    () =>
+    (requestedName?: string) =>
       attempt(async () => {
-        if (!openRef.current) {
+        const source = requestedName ?? openRef.current;
+        if (!source) {
           return;
         }
-        const content = bufferRef.current;
-        const name = nextCloneName(openRef.current, await desktop.beats.list());
+        // The draft map is a later task. Until it exists, the focused row is
+        // the only row with live in-memory content; every other row is cloned
+        // from disk explicitly rather than accidentally from the open buffer.
+        const content = source === openRef.current ? bufferRef.current : await desktop.beats.read(source);
+        const name = nextCloneName(source, await desktop.beats.list());
         await desktop.beats.create(name, content);
         await refresh();
         // The code is unchanged. When audio is already active, reevaluation
@@ -440,9 +443,9 @@ export function App() {
     (raw: string) =>
       attempt(async () => {
         const file = normalizeBeatName(raw);
-        await desktop.beats.create(file, STARTER);
+        await desktop.beats.create(file, STARTER_BEAT);
         await refresh();
-        adopt(file, STARTER);
+        adopt(file, STARTER_BEAT);
       }),
     [adopt, attempt, refresh],
   );
@@ -457,9 +460,11 @@ export function App() {
         manualBeatOrderRef.current = renamedOrder;
         setManualBeatOrder(renamedOrder);
         await refresh();
-        setOpen(file);
-        openRef.current = file;
-        persistBeat(file);
+        if (from === openRef.current) {
+          setOpen(file);
+          openRef.current = file;
+          persistBeat(file);
+        }
       }),
     [attempt, persistBeat, refresh],
   );
@@ -467,8 +472,12 @@ export function App() {
   const remove = useCallback(
     (name: string) =>
       attempt(async () => {
+        const wasOpen = name === openRef.current;
         await desktop.beats.remove(name);
         const list = await refresh();
+        if (!wasOpen) {
+          return;
+        }
         const next = list[0]?.name;
         if (next) {
           adopt(next, await desktop.beats.read(next));
@@ -574,7 +583,7 @@ export function App() {
             save
           </button>
           <button onClick={() => void cloneBeat()} disabled={!open} title="Clone this beat and switch to it">
-            save new
+            clone
           </button>
           <button onClick={() => changeTempo(cps - 0.05)} title="Slower" disabled={codedTempo}>
             −
@@ -616,6 +625,7 @@ export function App() {
             onCreate={(name) => void create(name)}
             onRename={(from, to) => void rename(from, to)}
             onRemove={(name) => void remove(name)}
+            onClone={(name) => void cloneBeat(name)}
             sortMode={beatSort}
             manualOrder={manualBeatOrder}
             onSortChange={changeSort}

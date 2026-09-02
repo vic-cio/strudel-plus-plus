@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DEFAULT_BEAT_SORT,
   isBeatSortMode,
@@ -9,6 +9,8 @@ import {
 
 type Draft = { kind: 'create' } | { kind: 'rename'; from: string } | { kind: 'confirm-delete'; name: string };
 type BeatInput = BeatSummary | string;
+type Menu = { name: string; left: number; top: number };
+type MenuAction = 'clone' | 'rename' | 'delete' | 'create';
 
 type Props = {
   beats: BeatInput[];
@@ -21,6 +23,7 @@ type Props = {
   onCreate: (name: string) => void;
   onRename: (from: string, to: string) => void;
   onRemove: (name: string) => void;
+  onClone: (name: string) => void;
   onSortChange: (mode: BeatSortMode) => void;
   onReorder: (from: string, to: string, position?: 'before' | 'after') => void;
   onDismissError: () => void;
@@ -45,13 +48,16 @@ export function FileTree({
   onCreate,
   onRename,
   onRemove,
+  onClone,
   onSortChange,
   onReorder,
   onDismissError,
 }: Props) {
   const [draft, setDraft] = useState<Draft>();
   const [value, setValue] = useState('');
+  const [menu, setMenu] = useState<Menu>();
   const input = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const dragged = useRef<string | undefined>(undefined);
 
   const beatSummaries = beats.map((beat) => (typeof beat === 'string' ? { name: beat, modifiedAt: 0 } : beat));
@@ -62,11 +68,97 @@ export function FileTree({
     input.current?.select();
   }, [draft]);
 
-  function begin(next: Draft) {
-    onDismissError();
-    setDraft(next);
-    setValue(next.kind === 'rename' ? next.from.replace(/\.js$/, '') : '');
-  }
+  const begin = useCallback(
+    (next: Draft) => {
+      setMenu(undefined);
+      onDismissError();
+      setDraft(next);
+      setValue(next.kind === 'rename' ? next.from.replace(/\.js$/, '') : '');
+    },
+    [onDismissError],
+  );
+
+  const openMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, name: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const menuWidth = 170;
+    const left = Math.min(Math.max(event.clientX, 4), Math.max(4, window.innerWidth - menuWidth));
+    setMenu({ name, left, top: Math.max(event.clientY, 4) });
+  }, []);
+
+  const choose = useCallback(
+    (action: MenuAction) => {
+      if (!menu) {
+        return;
+      }
+      const name = menu.name;
+      setMenu(undefined);
+      switch (action) {
+        case 'clone':
+          onClone(name);
+          return;
+        case 'rename':
+          begin({ kind: 'rename', from: name });
+          return;
+        case 'delete':
+          begin({ kind: 'confirm-delete', name });
+          return;
+        case 'create':
+          begin({ kind: 'create' });
+          return;
+        default: {
+          const _exhaustive: never = action;
+          return _exhaustive;
+        }
+      }
+    },
+    [begin, menu, onClone],
+  );
+
+  useEffect(() => {
+    if (!menu) {
+      return;
+    }
+    menuRef.current?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || !menuRef.current?.contains(target)) {
+        setMenu(undefined);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMenu(undefined);
+      }
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menu]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (draft || event.defaultPrevented || event.isComposing) {
+        return;
+      }
+      if (event.metaKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        begin({ kind: 'create' });
+      } else if (event.key === 'F2' && open) {
+        event.preventDefault();
+        begin({ kind: 'rename', from: open });
+      } else if (event.metaKey && event.key === 'Backspace' && open) {
+        event.preventDefault();
+        begin({ kind: 'confirm-delete', name: open });
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [begin, draft, open]);
 
   function commit() {
     if (!draft) {
@@ -123,15 +215,7 @@ export function FileTree({
               <option value="manual">Manual</option>
             </select>
           </label>
-          <button title="New beat" onClick={() => begin({ kind: 'create' })}>
-            +
-          </button>
-          <button title="Rename" disabled={!open} onClick={() => open && begin({ kind: 'rename', from: open })}>
-            ~
-          </button>
-          <button title="Delete" disabled={!open} onClick={() => open && begin({ kind: 'confirm-delete', name: open })}>
-            −
-          </button>
+          <span className="tree-shortcuts">⌘N new · F2 rename · ⌘⌫ delete</span>
         </span>
       </header>
       <div className="pane-body">
@@ -151,6 +235,7 @@ export function FileTree({
               key={name}
               className="tree-row"
               draggable={sortMode === 'manual'}
+              onContextMenu={(event) => openMenu(event, name)}
               onDragStart={() => {
                 dragged.current = name;
               }}
@@ -223,6 +308,30 @@ export function FileTree({
           );
         })}
         {draft?.kind === 'create' && <div className="tree-item">{editor}</div>}
+        {menu && (
+          <div
+            ref={menuRef}
+            className="tree-menu"
+            role="menu"
+            aria-label={`Beat actions for ${menu.name}`}
+            tabIndex={-1}
+            style={{ left: `${menu.left}px`, top: `${menu.top}px` }}
+          >
+            <div className="tree-menu-title">{menu.name}</div>
+            <button role="menuitem" onClick={() => choose('clone')}>
+              clone
+            </button>
+            <button role="menuitem" onClick={() => choose('rename')}>
+              rename
+            </button>
+            <button role="menuitem" onClick={() => choose('delete')}>
+              delete
+            </button>
+            <button role="menuitem" onClick={() => choose('create')}>
+              add new beat
+            </button>
+          </div>
+        )}
         {error && (
           <p className="tree-error" onClick={onDismissError}>
             {error}

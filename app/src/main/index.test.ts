@@ -18,6 +18,7 @@ const beatStoreFactory = vi.fn(() => ({
 }));
 
 const sessionsTouch = vi.fn(async () => undefined);
+const sessionsRemove = vi.fn(async () => undefined);
 const watcherClose = vi.fn(async () => undefined);
 const watchBeatsMock = vi.fn(() => ({ close: watcherClose }));
 
@@ -60,6 +61,7 @@ vi.mock('./sessions', () => ({
   createSessionStore: () => ({
     list: vi.fn(async () => []),
     create: vi.fn(async () => undefined),
+    remove: sessionsRemove,
     touch: sessionsTouch,
     getState: vi.fn(async () => ({})),
     setState: vi.fn(async () => undefined),
@@ -77,6 +79,7 @@ describe('openSession', () => {
     process.env.STRUDEL_BEATS_DIR = '/tmp/strudel-index-test-root';
     ptyStart.mockReset();
     ptyStart.mockReturnValue({ write: vi.fn(), resize: vi.fn(), kill: vi.fn() });
+    sessionsRemove.mockReset();
     vi.resetModules();
     const mod = await import('./index');
     await mod.ready;
@@ -120,5 +123,24 @@ describe('openSession', () => {
 
     const activeHandler = handlers.get(CH.sessionsActive)!;
     expect(await activeHandler({})).toBe('new-session');
+  });
+
+  it('guards deletion of the active session before reaching the store', async () => {
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+
+    const sessionsRemoveHandler = handlers.get(CH.sessionsRemove)!;
+    expect(() => sessionsRemoveHandler({}, 'active-session')).toThrow(/active session/i);
+    expect(sessionsRemove).not.toHaveBeenCalled();
+  });
+
+  it('deletes an inactive session through the guarded seam', async () => {
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+
+    const sessionsRemoveHandler = handlers.get(CH.sessionsRemove)!;
+    await sessionsRemoveHandler({}, 'default-session');
+
+    expect(sessionsRemove).toHaveBeenCalledWith('default-session');
   });
 });

@@ -261,6 +261,12 @@ async function main() {
     await sessions.create(name);
     return openSession(name);
   });
+  ipcMain.handle(CH.sessionsRemove, (_event, name: string) => {
+    if (name === active) {
+      throw new Error(`Cannot delete the active session: ${name}`);
+    }
+    return sessions.remove(name);
+  });
   ipcMain.handle(CH.sessionsOpen, (_event, name: string) => openSession(name));
   ipcMain.handle(CH.sessionsState, (_event, name: string) => sessions.getState(name));
   ipcMain.handle(CH.sessionsSetState, (_event, name: string, state: SessionState) => sessions.setState(name, state));

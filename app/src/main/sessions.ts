@@ -1,8 +1,9 @@
-import { access, lstat, mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { BEAT_EXTENSION } from '../shared/beatName';
 import { isBeatSortMode, type BeatSortMode } from '../shared/beatSorting';
 import { isDockState, type DockState } from '../shared/dockState';
+import { STARTER_BEAT } from '../shared/starterBeat';
 import { DEFAULT_SESSION_BEATS, DEFAULT_SESSION_NAME, DEFAULT_SESSION_STATE } from './defaultSession';
 import { seedHarnessContent } from './harnessContent';
 
@@ -22,12 +23,14 @@ type StoredState = SessionState & { usedAt?: number };
 export type SessionStore = {
   list(): Promise<Session[]>;
   create(name: string): Promise<void>;
+  remove(name: string): Promise<void>;
   touch(name: string): Promise<void>;
   getState(name: string): Promise<SessionState>;
   setState(name: string, state: SessionState): Promise<void>;
 };
 
 const STATE_FILE = '.session.json';
+const DEFAULT_SESSION_SEED_MARKER = '.default-session-seeded';
 const SHARED_FILES = ['AGENTS.md'] as const;
 const SHARED_FOLDERS = ['.claude', '.agents'] as const;
 
@@ -87,6 +90,14 @@ async function linkSharedPath(root: string, sessionPath: string, name: string): 
  */
 async function seedDefaultSession(base: string): Promise<void> {
   try {
+    // The example is a first-launch convenience, not a session that should
+    // come back after the user deliberately deletes it.
+    await access(join(base, DEFAULT_SESSION_SEED_MARKER));
+    return;
+  } catch {
+    // No marker: continue with the fresh-root check below.
+  }
+  try {
     const entries = await readdir(base, { withFileTypes: true });
     if (entries.some((entry) => entry.isDirectory() && !entry.name.startsWith('.'))) {
       return;
@@ -98,19 +109,11 @@ async function seedDefaultSession(base: string): Promise<void> {
     }
     await write(full, { ...DEFAULT_SESSION_STATE, usedAt: nextUsedAt() });
     await linkShared(base, full);
+    await writeFile(join(base, DEFAULT_SESSION_SEED_MARKER), 'seeded\n', 'utf8');
   } catch {
     // Seeding is a convenience. A root it could not reach still works.
   }
 }
-
-export const STARTER_BEAT = `// a new beat
-setcps(0.5)
-
-stack(
-  s("bd*2, ~ sd"),
-  s("hh*8").gain(0.4),
-)
-`;
 
 /**
  * Sessions are folders of beats.
@@ -174,6 +177,11 @@ export function createSessionStore(root: string): SessionStore {
       await writeFile(join(full, `untitled${BEAT_EXTENSION}`), STARTER_BEAT, 'utf8');
       await write(full, { usedAt: nextUsedAt() });
       await linkShared(base, full);
+    },
+
+    async remove(name) {
+      const full = locate(name);
+      await rm(full, { recursive: true, force: true });
     },
 
     async touch(name) {

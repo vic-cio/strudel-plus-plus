@@ -52,7 +52,7 @@ const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
     },
     beats: {
       root: vi.fn(async () => '/sessions-root/we cook'),
-      list: vi.fn(async () => []),
+      list: vi.fn(async (): Promise<string[]> => []),
       listInfo: vi.fn(async () => [
         { name: '808ing.js', modifiedAt: 1 },
         { name: 'we begin.js', modifiedAt: 2 },
@@ -132,6 +132,8 @@ beforeEach(() => {
   desktop.sessions.state.mockResolvedValue({ beat: 'we begin.js' });
   desktop.beats.read.mockClear();
   desktop.beats.read.mockImplementation(async (name: string) => `// ${name}`);
+  desktop.beats.list.mockResolvedValue([]);
+  desktop.beats.create.mockClear();
   desktop.beats.remove.mockClear();
   changeHandler.current = undefined;
   repl.state = { started: false, error: undefined };
@@ -205,8 +207,9 @@ describe('App session state', () => {
     await openSessionFromPicker(user);
     await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
 
-    // Rename via the tree: ~ opens the input pre-filled with the open beat.
-    await user.click(screen.getByTitle('Rename'));
+    // Rename via the row context menu; it opens the input pre-filled with the open beat.
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
     const input = await screen.findByDisplayValue('we begin');
     await user.clear(input);
     await user.type(input, 'day one{Enter}');
@@ -223,7 +226,8 @@ describe('App session state', () => {
     // Both beats go away; the app must not leave a beat name that no longer
     // resolves on disk.
     desktop.beats.listInfo.mockResolvedValue([]);
-    await user.click(screen.getByTitle('Delete'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
     await user.click(await screen.findByText('delete'));
 
     await waitFor(() => expect(persistedBeats().at(-1)).toBeNull());
@@ -253,6 +257,59 @@ describe('App session state', () => {
       const maps = setStateMock.mock.calls.filter((call) => 'cpsByBeat' in call[1]);
       expect(maps.length).toBeGreaterThan(0);
     });
+  });
+
+  it('clones the focused beat from the titlebar action', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    desktop.beats.list.mockResolvedValue(['we begin.js', '808ing.js']);
+    desktop.beats.create.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'clone' }));
+
+    await waitFor(() => expect(desktop.beats.create).toHaveBeenCalledWith('we begin-2.js', '// we begin.js'));
+  });
+
+  it('clones a non-focused row from disk until draft-map support lands', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    desktop.beats.list.mockResolvedValue(['we begin.js', '808ing.js']);
+    desktop.beats.read.mockClear();
+    desktop.beats.create.mockClear();
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'clone' }));
+
+    await waitFor(() => expect(desktop.beats.create).toHaveBeenCalledWith('808ing-2.js', '// 808ing.js'));
+    expect(desktop.beats.read).toHaveBeenCalledWith('808ing.js');
+  });
+
+  it('keeps inactive-row rename and delete from moving the active pointer', async () => {
+    const user = userEvent.setup();
+    desktop.beats.rename.mockClear();
+    desktop.beats.remove.mockClear();
+    desktop.beats.listInfo.mockImplementation(async () => [
+      { name: desktop.beats.rename.mock.calls.length > 0 ? 'drums.js' : '808ing.js', modifiedAt: 1 },
+      { name: 'we begin.js', modifiedAt: 2 },
+    ]);
+    render(<App />);
+    await openSessionFromPicker(user);
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
+    await user.clear(screen.getByPlaceholderText('name'));
+    await user.type(screen.getByPlaceholderText('name'), 'drums{Enter}');
+    await waitFor(() => expect(desktop.beats.rename).toHaveBeenCalledWith('808ing.js', 'drums.js'));
+    expect(persistedBeats().at(-1)).toBe('we begin.js');
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'drums.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
+    await user.click(screen.getByText('delete'));
+    await waitFor(() => expect(desktop.beats.remove).toHaveBeenCalledWith('drums.js'));
+    expect(persistedBeats().at(-1)).toBe('we begin.js');
   });
 });
 
@@ -345,7 +402,7 @@ describe('App harness-edit hardening', () => {
     expect(await screen.findByText('editor exploded')).toBeTruthy();
     // The disk content was still adopted into the buffer before the editor
     // threw: the next attempt works from the new content, not the old.
-    expect(screen.getByTitle('Rename')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'we begin.js' })).toBeTruthy();
   });
 
   it('clears a stale REPL parse error when a harness write lands while stopped', async () => {

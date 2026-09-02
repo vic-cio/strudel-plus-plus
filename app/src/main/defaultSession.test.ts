@@ -54,4 +54,12 @@ describe('seedDefaultSession', () => {
     const sessions = await store.list();
     expect(sessions.map((session) => session.name)).toEqual([DEFAULT_SESSION_NAME]);
   });
+
+  it('does not resurrect the default after it is deliberately removed', async () => {
+    const store = createSessionStore(root);
+    await store.list();
+    await store.remove(DEFAULT_SESSION_NAME);
+
+    await expect(store.list()).resolves.toEqual([]);
+  });
 });

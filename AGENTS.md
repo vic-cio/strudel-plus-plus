@@ -42,6 +42,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 ## Default example session
 
 - A brand-new sessions root (no session folder yet) is seeded with one example session, `we cook`, the moment anything calls `list()` — see `seedDefaultSession` in `app/src/main/sessions.ts`, alongside `seedHarnessContent`. It never touches a root that already has a session. The snapshot's files live under `app/default-session/` and are pulled in at build time via Vite `?raw`/JSON imports in `app/src/main/defaultSession.ts`, the same inlining approach `harnessContent.ts` uses for its defaults — no extra packaging step needed. `defaultSession.ts` strips the snapshot's `usedAt`; seeding always stamps its own via `nextUsedAt`.
+- The one-time default seed writes `.default-session-seeded`, so deliberately deleting `we cook` does not resurrect it on the next `list()`. Session deletion is exposed through `sessions:remove` but the main-process handler refuses the active session (`app/src/main/index.ts`).
 
 ## Beat watcher ignore rule
 

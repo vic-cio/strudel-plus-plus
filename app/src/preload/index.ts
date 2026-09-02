@@ -15,6 +15,7 @@ const api = {
     list: (): Promise<{ name: string; beats: number; usedAt: number }[]> => ipcRenderer.invoke(CH.sessionsList),
     active: (): Promise<string> => ipcRenderer.invoke(CH.sessionsActive),
     create: (name: string): Promise<{ name: string; folder: string }> => ipcRenderer.invoke(CH.sessionsCreate, name),
+    remove: (name: string): Promise<void> => ipcRenderer.invoke(CH.sessionsRemove, name),
     open: (name: string): Promise<{ name: string; folder: string }> => ipcRenderer.invoke(CH.sessionsOpen, name),
     state: (
       name: string,

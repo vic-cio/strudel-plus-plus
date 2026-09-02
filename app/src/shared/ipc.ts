@@ -3,6 +3,7 @@ export const CH = {
   sessionsRoot: 'sessions:root',
   sessionsList: 'sessions:list',
   sessionsCreate: 'sessions:create',
+  sessionsRemove: 'sessions:remove',
   sessionsOpen: 'sessions:open',
   sessionsActive: 'sessions:active',
   sessionsState: 'sessions:state',
