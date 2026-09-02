@@ -237,8 +237,9 @@ button:disabled {
 
 .app {
   display: grid;
-  /* The dock row is auto: the plugin strip keeps its own fixed height. */
-  grid-template-rows: 34px 1fr auto 22px;
+  /* Row 3 is the dock grip; row 4 sizes the dock from --dock-h, which the
+     grip drags and App sets (104px fallback). */
+  grid-template-rows: 34px 1fr 5px var(--dock-h, 104px) 22px;
   /* minmax(0, 1fr) clamps the single column to the window. An auto track
      sizes to the widest item's max-content, so one long unbreakable line
      anywhere (a pattern error message in the status bar, say) used to widen
@@ -306,6 +307,14 @@ button:disabled {
   background: var(--ground-sunk);
   background-image: var(--hatch);
 }
+/* The horizontal sibling runs between the panes row and the dock. */
+.grip-h {
+  cursor: row-resize;
+  border-left: none;
+  border-right: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
 .grip:hover,
 .grip[data-dragging='true'] {
   background-color: var(--ground-raised);
@@ -315,6 +324,9 @@ button:disabled {
 body[data-resizing='true'] {
   cursor: col-resize;
   user-select: none;
+}
+body[data-resizing='true'][data-resize-axis='row'] {
+  cursor: row-resize;
 }
 
 .pane-title {
@@ -562,13 +574,12 @@ body[data-resizing='true'] {
 /*
   One or two panes of live gear between the editors and the status bar. Same
   philosophy as the beats sidebar and the harness panel: sunk tab strip,
-  hairline borders, bracketed labels. The height is fixed in v1; panes split
-  and merge inside it.
+  hairline borders, bracketed labels. The height is the --dock-h grid row,
+  dragged by the grip above; panes split and merge inside it.
 */
 .dock {
-  height: 104px;
+  height: 100%;
   min-height: 0;
-  border-top: 1px solid var(--line);
   background: var(--ground);
 }
 .dock-panes {

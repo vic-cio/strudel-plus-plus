@@ -41,6 +41,17 @@ function usePaneWidth(key: string, fallback: number) {
   return [width, setWidth] as const;
 }
 
+/** Dock height bounds. The floor keeps the tab strip plus a sliver of body
+ *  visible; the ceiling is computed from the live window height so a tall
+ *  dock can never starve the editor and harness rows above it. */
+const DOCK_MIN = 56;
+const DOCK_DEFAULT = 104;
+/** Titlebar 34 + dock grip 5 + status bar 22, plus the least room the panes
+ *  row keeps for the editor and the harness. */
+const DOCK_CHROME = 34 + 5 + 22 + 160;
+
+const dockMaxFor = (windowHeight: number) => Math.max(DOCK_MIN, windowHeight - DOCK_CHROME);
+
 const STARTER = `// a new beat\nsetcps(0.5)\n\nstack(\n  s("bd*2, ~ sd"),\n  s("hh*8").gain(0.4),\n)\n`;
 
 function sameOrder(left: string[], right: string[]): boolean {
@@ -65,6 +76,10 @@ export function App() {
   const [termWidth, setTermWidth] = usePaneWidth('pane.term', 460);
   const [treeOpen, setTreeOpen] = usePaneWidth('pane.treeOpen', 1);
   const [termOpen, setTermOpen] = usePaneWidth('pane.termOpen', 1);
+  // Dock height: same restart-surviving preference as the pane widths. The
+  // clamp is applied against the live window height, not a fixed guess.
+  const [dockHeight, setDockHeight] = usePaneWidth('pane.dock', DOCK_DEFAULT);
+  const [windowHeight, setWindowHeight] = useState(() => window.innerHeight);
   const [cpsByBeat, setCpsByBeat] = useState<Record<string, number>>({});
   // Plugin dock layout: which devices are open, how the dock is split, and
   // each device's own faders. Session-scoped like the tempo map — switching
@@ -502,6 +517,19 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [save, toggle]);
 
+  // The dock clamp follows the Electron window as it is resized.
+  useEffect(() => {
+    const onResize = () => setWindowHeight(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // A stored height that no longer fits the current window is clamped at
+  // view time; the stored preference itself is left alone, so enlarging the
+  // window brings the captain's chosen height back.
+  const dockMax = dockMaxFor(windowHeight);
+  const dockH = Math.min(Math.max(dockHeight, DOCK_MIN), dockMax);
+
   if (picking) {
     return (
       <SessionPicker
@@ -516,7 +544,7 @@ export function App() {
   }
 
   return (
-    <div className="app">
+    <div className="app" style={{ '--dock-h': `${dockH}px` } as CSSProperties}>
       <header className="titlebar">
         <button
           className="collapse"
@@ -591,7 +619,15 @@ export function App() {
         )}
 
         {/* 210px is where the pane header stops fitting its own title. */}
-        <Grip width={treeWidth} onChange={setTreeWidth} side="left" min={210} max={560} />
+        <Grip
+          size={treeWidth}
+          onChange={setTreeWidth}
+          side="left"
+          min={210}
+          max={560}
+          resetTo={210}
+          label="Resize beats pane"
+        />
 
         <section className="pane">
           <header className="pane-title">
@@ -602,10 +638,30 @@ export function App() {
           <div className="pane-body editor" ref={containerRef} />
         </section>
 
-        <Grip width={termWidth} onChange={setTermWidth} side="right" min={260} max={1000} />
+        <Grip
+          size={termWidth}
+          onChange={setTermWidth}
+          side="right"
+          min={260}
+          max={1000}
+          resetTo={460}
+          label="Resize harness pane"
+        />
 
         {harnesses.length > 0 && <HarnessPane harnesses={harnesses} active={harness} onPick={setHarness} beat={open} />}
       </div>
+
+      {/* The dock's height is the grid's --dock-h row; this grip drags it. */}
+      <Grip
+        orientation="horizontal"
+        size={dockH}
+        onChange={setDockHeight}
+        side="below"
+        min={DOCK_MIN}
+        max={dockMax}
+        resetTo={DOCK_DEFAULT}
+        label="Resize plugin dock"
+      />
 
       <PluginDock dock={dock} onChange={setDock} playing={state.started} />
 
