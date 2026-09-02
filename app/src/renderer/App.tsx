@@ -3,10 +3,12 @@ import { ConflictBar } from './components/ConflictBar';
 import { FileTree } from './components/FileTree';
 import { Grip } from './components/Grip';
 import { HarnessPane } from './components/HarnessPane';
+import { PluginDock } from './components/PluginDock';
 import { SessionPicker, type SessionSummary } from './components/SessionPicker';
 import { StatusBar } from './components/StatusBar';
 import { TempoBox } from './components/TempoBox';
 import { desktop } from './desktop';
+import { listPlugins } from './plugins';
 import { APP_BUILT, readAudio, writeSnapshot } from './liveSnapshot';
 import { onRendererError } from './reportErrors';
 import { useStrudel } from './useStrudel';
@@ -16,6 +18,7 @@ import { nextCloneName } from '../shared/cloneName';
 import { handoffClonedBeat } from '../shared/cloneHandoff';
 import { resolveDiskChange } from '../shared/sync';
 import { clampCps, hasCodedTempo } from '../shared/tempo';
+import { normalizeDockState, type DockState } from '../shared/dockState';
 import type { BeatChange } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
 
@@ -63,6 +66,10 @@ export function App() {
   const [treeOpen, setTreeOpen] = usePaneWidth('pane.treeOpen', 1);
   const [termOpen, setTermOpen] = usePaneWidth('pane.termOpen', 1);
   const [cpsByBeat, setCpsByBeat] = useState<Record<string, number>>({});
+  // Plugin dock layout: which devices are open, how the dock is split, and
+  // each device's own faders. Session-scoped like the tempo map — switching
+  // beats must not close the mixer.
+  const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
 
   // The last content this app wrote to disk. Everything the sync rule decides
   // hangs off it, so it is a ref: it must be current inside the watcher
@@ -193,6 +200,10 @@ export function App() {
         const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
         const restoredManualOrder = saved.manualBeatOrder ?? [];
         const restoredCps = saved.cpsByBeat ?? {};
+        const restoredDock = normalizeDockState(
+          saved.dock,
+          listPlugins().map((plugin) => plugin.id),
+        );
         const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
         const content = beat ? await desktop.beats.read(beat) : undefined;
 
@@ -208,6 +219,7 @@ export function App() {
         setBeatSort(restoredSort);
         setManualBeatOrder(restoredManualOrder);
         setCpsByBeat(restoredCps);
+        setDock(restoredDock);
         setSession(name);
         sessionRef.current = name;
         setPicking(false);
@@ -232,11 +244,11 @@ export function App() {
     [adopt, attempt, persistBeat, refresh],
   );
 
-  // Remember tempo and sort with the session, so reopening restores them.
-  // The beat pointer is deliberately not written here: it is persisted by the
-  // events that move the buffer (adopt, rename, remove), because a render
-  // scheduled by a tempo or sort change must never write a beat that belongs
-  // to another moment.
+  // Remember tempo, sort, and the plugin dock with the session, so reopening
+  // restores them. The beat pointer is deliberately not written here: it is
+  // persisted by the events that move the buffer (adopt, rename, remove),
+  // because a render scheduled by a tempo or sort change must never write a
+  // beat that belongs to another moment.
   useEffect(() => {
     if (!sessionRef.current) {
       return;
@@ -245,8 +257,9 @@ export function App() {
       cpsByBeat,
       beatSort,
       manualBeatOrder,
+      dock,
     });
-  }, [cpsByBeat, beatSort, manualBeatOrder]);
+  }, [cpsByBeat, beatSort, manualBeatOrder, dock]);
 
   const changeSort = useCallback((mode: BeatSortMode) => {
     if (mode === 'manual') {
@@ -593,6 +606,8 @@ export function App() {
 
         {harnesses.length > 0 && <HarnessPane harnesses={harnesses} active={harness} onPick={setHarness} beat={open} />}
       </div>
+
+      <PluginDock dock={dock} onChange={setDock} playing={state.started} />
 
       <StatusBar
         root={root}

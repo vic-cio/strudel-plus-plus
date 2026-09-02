@@ -159,6 +159,41 @@ describe('createSessionStore', () => {
     const onDisk = JSON.parse(await readFile(join(root, 'set', '.session.json'), 'utf8')) as { beat?: string | null };
     expect(onDisk.beat).toBeNull();
   });
+
+  it('remembers the plugin dock with the session', async () => {
+    const store = createSessionStore(root);
+    await store.create('set');
+    const dock = { split: true, panes: [{ tabs: ['eq'], active: 'eq' }, { tabs: [] }] };
+    await store.setState('set', { dock });
+    await expect(store.getState('set')).resolves.toEqual({ dock });
+  });
+
+  it('keeps the dock while beats switch under it', async () => {
+    // Plugins are live gear: switching beats must not close a device or
+    // forget where its faders were, so the prune that trims per-beat state
+    // must leave the dock alone.
+    const store = createSessionStore(root);
+    await store.create('set');
+    await writeFile(join(root, 'set', 'intro.js'), '');
+    const dock = { panes: [{ tabs: ['eq'], active: 'eq' }], pluginState: { eq: { gain: 0.75 } } };
+    await store.setState('set', { dock });
+    await store.setState('set', { beat: 'intro.js', cpsByBeat: { 'intro.js': 0.6 } });
+    await store.setState('set', { beat: null });
+    await expect(store.getState('set')).resolves.toEqual({
+      beat: null,
+      cpsByBeat: { 'intro.js': 0.6 },
+      dock,
+    });
+  });
+
+  it('drops a dock that is not shaped like one', async () => {
+    // A hand-edited or half-written file must not feed the renderer garbage
+    // it would then render.
+    const store = createSessionStore(root);
+    await store.create('set');
+    await writeFile(join(root, 'set', '.session.json'), JSON.stringify({ dock: 'wide open' }), 'utf8');
+    await expect(store.getState('set')).resolves.toEqual({});
+  });
 });
 
 describe('shared harness files', () => {
