@@ -46,7 +46,7 @@ if (couplingFiles.length > 0) {
 const trackedOutsideWrapper = sourceFiles.filter(
   (file) =>
     !file.startsWith('app/') &&
-    !['.github/', 'scripts/'].some((prefix) => file.startsWith(prefix)) &&
+    !['.github/', 'scripts/', 'patches/'].some((prefix) => file.startsWith(prefix)) &&
     ![
       '.gitignore',
       '.nvmrc',
