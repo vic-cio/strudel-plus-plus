@@ -142,6 +142,8 @@ beforeEach(() => {
   codeChange.current = undefined;
   repl.state = { started: false, error: undefined };
   repl.clearError.mockClear();
+  repl.getCode.mockReset();
+  repl.getCode.mockReturnValue(undefined);
   repl.setCode.mockClear();
   repl.reevaluate.mockClear();
 });
@@ -303,6 +305,18 @@ describe('App beat drafts', () => {
     expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true');
   });
 
+  it('Cmd+S captures the current editor value before writing', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    repl.getCode.mockReturnValue('// latest editor code');
+    desktop.beats.write.mockClear();
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+
+    await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// latest editor code'));
+  });
+
   it('warns on close when an inactive beat still has a dirty draft', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -313,6 +327,71 @@ describe('App beat drafts', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
     );
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('captures an unpolled edit before the close guard checks drafts', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    repl.getCode.mockReturnValue('// unpolled editor code');
+
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('captures the editor before switching sessions', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    repl.getCode.mockReturnValue('// unpolled before session switch');
+
+    await user.click(screen.getByTitle('Switch session'));
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('keeps a dirty inactive draft when its disk file is unlinked', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+
+    await waitFor(() => expect(changeHandler.current).toBeDefined());
+    await changeHandler.current!({ name: 'we begin.js', event: 'unlink' });
+
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('preserves a dirty draft when an app rename emits its unlink first', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByTitle('Rename'));
+    const input = await screen.findByDisplayValue('we begin');
+    desktop.beats.listInfo.mockResolvedValue([
+      { name: 'day one.js', modifiedAt: 2 },
+      { name: '808ing.js', modifiedAt: 1 },
+    ]);
+    desktop.beats.rename.mockImplementationOnce(async () => {
+      await changeHandler.current?.({ name: 'we begin.js', event: 'unlink' });
+    });
+
+    await user.clear(input);
+    await user.type(input, 'day one{Enter}');
+
     const event = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(event);
 

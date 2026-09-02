@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStrudel } from './useStrudel';
@@ -99,11 +99,12 @@ afterEach(() => {
 /** Renders the editor plus buttons that drive the hook's wrappers, and shows
  * the error surface: the assertions read the status-bar-facing state. */
 function Harness({ showEditor }: { showEditor: boolean }) {
-  const { containerRef, state, evaluate, toggle, clearError } = useStrudel(vi.fn());
+  const { containerRef, state, setCode, evaluate, toggle, clearError } = useStrudel(vi.fn());
   return (
     <>
       {showEditor ? <div data-testid="editor-host" ref={containerRef} /> : null}
       <output data-testid="repl-error">{state.error?.message ?? ''}</output>
+      <button onClick={() => setCode('queued code')}>set code</button>
       <button onClick={() => evaluate()}>evaluate</button>
       <button onClick={() => toggle()}>toggle</button>
       <button onClick={() => clearError()}>clear</button>
@@ -132,6 +133,15 @@ describe('useStrudel', () => {
 
     expect(mirrors).toHaveLength(1);
     expect(screen.getByTestId('editor-host').querySelector('.cm-editor')).not.toBeNull();
+  });
+
+  it('applies code requested while the editor host is absent after it mounts', () => {
+    const view = render(<Harness showEditor={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'set code' }));
+    view.rerender(<Harness showEditor />);
+
+    expect(mirrors[0]?.code).toBe('queued code');
   });
 
   it('lands a rejected evaluate in the error surface instead of an unhandled rejection', async () => {

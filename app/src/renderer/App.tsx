@@ -103,6 +103,7 @@ export function App() {
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
   const draftStateRef = useRef<DraftState>({});
+  const pendingRenameRef = useRef<{ from: string; to: string }>();
   const beatsRef = useRef<BeatSummary[]>([]);
   const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
   const manualBeatOrderRef = useRef<string[]>([]);
@@ -161,7 +162,6 @@ export function App() {
     dirtyByBeat[beat.name] = session !== undefined && isBeatDirty(draftState, session, beat.name);
   }
   const dirty = Boolean(session && open && isBeatDirty(draftState, session, open));
-  const hasUnsavedDrafts = hasDirtyDrafts(draftState);
   const conflict = session && open ? draftState[session]?.conflicts[open] : undefined;
   const codedTempo = hasCodedTempo(buffer);
 
@@ -267,7 +267,10 @@ export function App() {
     if (!sessionName || !beatName) {
       return;
     }
-    updateDraftState(recordDraft(draftStateRef.current, sessionName, beatName, getCode() ?? bufferRef.current));
+    const content = getCode() ?? bufferRef.current;
+    bufferRef.current = content;
+    setBuffer(content);
+    updateDraftState(recordDraft(draftStateRef.current, sessionName, beatName, content));
   }, [getCode, updateDraftState]);
 
   /** Open a session: point the app at its folder and restore where it was left. */
@@ -464,11 +467,12 @@ export function App() {
     if (!sessionName || !beatName) {
       return;
     }
-    const content = bufferRef.current;
+    const content = getCode() ?? bufferRef.current;
+    bufferRef.current = content;
     await desktop.beats.write(beatName, content);
     updateDraftState(saveBeat(draftStateRef.current, sessionName, beatName, content));
     setBuffer(content);
-  }, [updateDraftState]);
+  }, [getCode, updateDraftState]);
 
   // Global renderer failures (an effect that threw, an IPC that rejected) are
   // already logged to the main process; surfacing them here keeps a failure a
@@ -490,6 +494,12 @@ export function App() {
       }
 
       if (change.event === 'unlink') {
+        if (pendingRenameRef.current?.from === change.name) {
+          return;
+        }
+        if (isBeatDirty(draftStateRef.current, sessionName, change.name)) {
+          return;
+        }
         updateDraftState(removeBeat(draftStateRef.current, sessionName, change.name));
         if (change.name === openRef.current) {
           openRef.current = undefined;
@@ -591,18 +601,26 @@ export function App() {
       return attempt(async () => {
         const file = normalizeBeatName(raw);
         const currentOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
-        await desktop.beats.rename(from, file);
-        const sessionName = sessionRef.current;
-        if (sessionName) {
-          updateDraftState(renameBeat(draftStateRef.current, sessionName, from, file));
+        const pendingRename = { from, to: file };
+        pendingRenameRef.current = pendingRename;
+        try {
+          await desktop.beats.rename(from, file);
+          const sessionName = sessionRef.current;
+          if (sessionName) {
+            updateDraftState(renameBeat(draftStateRef.current, sessionName, from, file));
+          }
+          const renamedOrder = currentOrder.map((name) => (name === from ? file : name));
+          manualBeatOrderRef.current = renamedOrder;
+          setManualBeatOrder(renamedOrder);
+          await refresh();
+          setOpen(file);
+          openRef.current = file;
+          persistBeat(file);
+        } finally {
+          if (pendingRenameRef.current === pendingRename) {
+            pendingRenameRef.current = undefined;
+          }
         }
-        const renamedOrder = currentOrder.map((name) => (name === from ? file : name));
-        manualBeatOrderRef.current = renamedOrder;
-        setManualBeatOrder(renamedOrder);
-        await refresh();
-        setOpen(file);
-        openRef.current = file;
-        persistBeat(file);
       });
     },
     [attempt, captureCurrentDraft, persistBeat, refresh, updateDraftState],
@@ -661,6 +679,7 @@ export function App() {
   // whether to stay; restarting the app creates a fresh, empty DraftState.
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      captureCurrentDraft();
       if (!hasDirtyDrafts(draftStateRef.current)) {
         return;
       }
@@ -669,7 +688,17 @@ export function App() {
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [hasUnsavedDrafts]);
+  }, [captureCurrentDraft]);
+
+  const showSessionPicker = useCallback(() => {
+    captureCurrentDraft();
+    setPicking(true);
+  }, [captureCurrentDraft]);
+
+  const cancelSessionPicker = useCallback(() => {
+    setCode(bufferRef.current);
+    setPicking(false);
+  }, [setCode]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -715,7 +744,7 @@ export function App() {
         error={beatError}
         onOpen={(name) => void openSession(name)}
         onCreate={(name) => void openSession(name, true)}
-        onCancel={session ? () => setPicking(false) : undefined}
+        onCancel={session ? cancelSessionPicker : undefined}
       />
     );
   }
@@ -730,7 +759,7 @@ export function App() {
         >
           {treeOpen ? '[<]' : '[>]'}
         </button>
-        <button className="collapse" onClick={() => setPicking(true)} title="Switch session">
+        <button className="collapse" onClick={showSessionPicker} title="Switch session">
           {session ?? 'sessions'}
         </button>
         <span className="beat">
