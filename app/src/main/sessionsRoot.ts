@@ -21,6 +21,8 @@ export const LEGACY_MIGRATION_DIRECTORY = 'legacy-migration';
 export const LEGACY_MIGRATION_MARKER = '.strudel-legacy-archive';
 export const LEGACY_MIGRATION_MARKER_CONTENT = 'strudel++ legacy migration archive\n';
 export const LEGACY_MIGRATION_TRANSACTION_MARKER = '.strudel-migration-transaction.json';
+export const LEGACY_MIGRATION_LOCK = '.strudel-migration.lock';
+export const LEGACY_MIGRATION_SOURCE_CLAIM_PREFIX = '.strudel-migration-source.';
 
 export function defaultSessionsRoot(home: string = homedir()): string {
   return join(home, 'Music', DEFAULT_SESSIONS_ROOT_NAME);
@@ -122,6 +124,16 @@ async function migrateLegacyRoots(root: string, legacyRoots: readonly string[]):
     throw new Error(`Sessions root exists but is not a directory: ${root}`);
   }
 
+  if (rootKind === 'missing') {
+    await mkdir(root, { recursive: true });
+  }
+
+  await withMigrationLock(root, async () => {
+    await migrateLegacyRootsWhileLocked(root, legacyRoots);
+  });
+}
+
+async function migrateLegacyRootsWhileLocked(root: string, legacyRoots: readonly string[]): Promise<void> {
   const existingLegacyRoots: string[] = [];
   for (const legacyRoot of legacyRoots) {
     if (legacyRoot === root || root.startsWith(`${legacyRoot}${sep}`) || legacyRoot.startsWith(`${root}${sep}`)) {
@@ -138,13 +150,8 @@ async function migrateLegacyRoots(root: string, legacyRoots: readonly string[]):
   }
 
   if (existingLegacyRoots.length === 0) {
-    if (rootKind === 'directory') {
-      await recoverStaleTransactionsWithReport(root);
-    }
+    await recoverStaleTransactionsWithReport(root);
     return;
-  }
-  if (rootKind === 'missing') {
-    await mkdir(root, { recursive: true });
   }
   await recoverStaleTransactionsWithReport(root);
 
@@ -171,7 +178,91 @@ async function migrateLegacyRoots(root: string, legacyRoots: readonly string[]):
   }
 }
 
+type MigrationLock = {
+  pid: number;
+  token: string;
+};
+
+async function withMigrationLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  const lockPath = join(root, LEGACY_MIGRATION_LOCK);
+  const lock: MigrationLock = {
+    pid: process.pid,
+    token: `${process.pid}:${Date.now()}:${Math.random()}`,
+  };
+  const contents = JSON.stringify(lock);
+  let acquired = false;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await writeFile(lockPath, contents, { encoding: 'utf8', flag: 'wx' });
+      acquired = true;
+      break;
+    } catch (error: unknown) {
+      if (!hasCode(error, 'EEXIST')) {
+        throw error;
+      }
+      let owner: MigrationLock;
+      try {
+        const parsed: unknown = JSON.parse(await readFile(lockPath, 'utf8'));
+        if (
+          !isRecord(parsed) ||
+          typeof parsed.pid !== 'number' ||
+          !Number.isInteger(parsed.pid) ||
+          typeof parsed.token !== 'string'
+        ) {
+          throw new Error('invalid lock contents');
+        }
+        owner = { pid: parsed.pid, token: parsed.token };
+      } catch (readError: unknown) {
+        if (hasCode(readError, 'ENOENT')) {
+          continue;
+        }
+        throw new Error(`Cannot inspect migration lock ${lockPath}: ${errorMessage(readError)}`);
+      }
+      if (isProcessAlive(owner.pid)) {
+        throw new Error(`Sessions root migration is already in progress: ${lockPath}`);
+      }
+      try {
+        await unlink(lockPath);
+      } catch (unlinkError: unknown) {
+        if (!hasCode(unlinkError, 'ENOENT')) {
+          throw unlinkError;
+        }
+      }
+    }
+  }
+
+  if (!acquired) {
+    throw new Error(`Could not acquire sessions root migration lock: ${lockPath}`);
+  }
+
+  try {
+    return await operation();
+  } finally {
+    try {
+      const current = await readFile(lockPath, 'utf8');
+      if (current === contents) {
+        await unlink(lockPath);
+      }
+    } catch (error: unknown) {
+      if (!hasCode(error, 'ENOENT')) {
+        throw error;
+      }
+    }
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return !hasCode(error, 'ESRCH');
+  }
+}
+
 async function migrateLegacyRoot(root: string, legacyRoot: string, conflicts: MigrationConflict[]): Promise<string[]> {
+  await recoverSourceClaims(legacyRoot);
   const context: MigrationContext = { root, legacyRoot, conflicts };
   for (let pass = 0; pass < 2; pass += 1) {
     const entries = await readDirectoryEntries(legacyRoot);
@@ -229,7 +320,7 @@ async function migrateLegacyEntries(context: MigrationContext, entries: readonly
       continue;
     }
 
-    if (isSharedEntry(entry.name)) {
+    if (isSharedEntry(entry)) {
       await migrateSharedEntry(context, entry.name);
       continue;
     }
@@ -252,8 +343,11 @@ async function migrateLegacyEntries(context: MigrationContext, entries: readonly
   }
 }
 
-function isSharedEntry(name: string): boolean {
-  return name === 'AGENTS.md' || name === '.claude' || name === '.agents';
+function isSharedEntry(entry: Dirent): boolean {
+  if (entry.name === 'AGENTS.md') {
+    return entry.isFile();
+  }
+  return (entry.name === '.claude' || entry.name === '.agents') && entry.isDirectory();
 }
 
 async function migrateSharedEntry(context: MigrationContext, name: string): Promise<void> {
@@ -701,30 +795,74 @@ async function recoverStaleTransactionsWithReport(root: string): Promise<void> {
 }
 
 async function recoverStaleTransactions(root: string): Promise<void> {
-  for (const marker of await findTransactionMarkers(root)) {
+  const artifacts = await findMigrationArtifacts(root);
+  const referencedStages = new Set<string>();
+  for (const marker of artifacts.markers) {
     const transaction = await readMigrationTransaction(marker);
     const destination = dirname(marker);
     const stage = resolve(transaction.stage);
     if (!isWithin(root, destination) || !isWithin(root, stage)) {
       throw new Error(`Migration transaction is outside the sessions root: ${marker}`);
     }
+    referencedStages.add(stage);
     await recoverTransaction(destination, stage, resolve(transaction.source));
+  }
+  for (const stage of artifacts.stages) {
+    if (!referencedStages.has(resolve(stage))) {
+      await removeOrphanStage(stage);
+    }
   }
 }
 
-async function findTransactionMarkers(path: string): Promise<string[]> {
-  const markers: string[] = [];
+type MigrationArtifacts = {
+  markers: string[];
+  stages: string[];
+};
+
+async function findMigrationArtifacts(path: string): Promise<MigrationArtifacts> {
+  const artifacts: MigrationArtifacts = { markers: [], stages: [] };
   for (const entry of await readDirectoryEntries(path)) {
     const child = join(path, entry.name);
     if (entry.name === LEGACY_MIGRATION_TRANSACTION_MARKER && entry.isFile()) {
-      markers.push(child);
+      artifacts.markers.push(child);
+      continue;
+    }
+    if (isMigrationStageName(entry.name) && (entry.isFile() || entry.isDirectory())) {
+      artifacts.stages.push(child);
       continue;
     }
     if (entry.isDirectory()) {
-      markers.push(...(await findTransactionMarkers(child)));
+      const nested = await findMigrationArtifacts(child);
+      artifacts.markers.push(...nested.markers);
+      artifacts.stages.push(...nested.stages);
     }
   }
-  return markers;
+  return artifacts;
+}
+
+function isMigrationStageName(name: string): boolean {
+  return /^\..+\.migration-stage(?:-\d+)?$/.test(name);
+}
+
+async function removeOrphanStage(stage: string): Promise<void> {
+  const destination = destinationForStage(stage);
+  if (!destination) {
+    return;
+  }
+  const stageKind = await entryKind(stage);
+  const destinationKind = await entryKind(destination);
+  if (stageKind === 'missing' || destinationKind === 'missing') {
+    return;
+  }
+  if (await entriesEqual(stage, destination, stageKind, destinationKind)) {
+    await removeTree(stage);
+  }
+}
+
+function destinationForStage(stage: string): string | undefined {
+  const name = basename(stage);
+  const match = name.match(/^\.(.+)\.migration-stage(?:-\d+)?$/);
+  return match?.[1] ? join(dirname(stage), match[1]) : undefined;
 }
 
 async function readMigrationTransaction(marker: string): Promise<MigrationTransaction> {
@@ -945,10 +1083,10 @@ async function claimSource(source: string): Promise<string | undefined> {
     return undefined;
   }
   const parent = dirname(source);
-  const baseName = `.${basename(source)}.migration-source`;
+  const encodedSourceName = Buffer.from(basename(source), 'utf8').toString('base64url');
   let attempt = 1;
   while (true) {
-    const name = attempt === 1 ? baseName : `${baseName}-${attempt}`;
+    const name = `${LEGACY_MIGRATION_SOURCE_CLAIM_PREFIX}${encodedSourceName}~${attempt}`;
     const claim = join(parent, name);
     try {
       await rename(source, claim);
@@ -964,6 +1102,66 @@ async function claimSource(source: string): Promise<string | undefined> {
       throw error;
     }
   }
+}
+
+type SourceClaim = {
+  path: string;
+  sourceName: string;
+};
+
+async function recoverSourceClaims(legacyRoot: string): Promise<void> {
+  for (const claim of await findSourceClaims(legacyRoot)) {
+    const source = join(dirname(claim.path), claim.sourceName);
+    const sourceKind = await entryKind(source);
+    if (sourceKind === 'missing') {
+      await rename(claim.path, source);
+      continue;
+    }
+
+    const claimed = await snapshotEntry(claim.path);
+    if (snapshotsEqual(claimed, await snapshotEntry(source))) {
+      await removeTree(claim.path);
+      continue;
+    }
+    throw new Error(`A previous migration preserved a changed source at ${claim.path}`);
+  }
+}
+
+async function findSourceClaims(path: string): Promise<SourceClaim[]> {
+  const claims: SourceClaim[] = [];
+  for (const entry of await readDirectoryEntries(path)) {
+    const child = join(path, entry.name);
+    const sourceName = sourceNameFromClaim(entry.name);
+    if (sourceName && (entry.isDirectory() || entry.isFile() || entry.isSymbolicLink())) {
+      claims.push({ path: child, sourceName });
+      continue;
+    }
+    if (entry.isDirectory()) {
+      claims.push(...(await findSourceClaims(child)));
+    }
+  }
+  return claims;
+}
+
+function sourceNameFromClaim(name: string): string | undefined {
+  if (name.startsWith(LEGACY_MIGRATION_SOURCE_CLAIM_PREFIX)) {
+    const encoded = name.slice(LEGACY_MIGRATION_SOURCE_CLAIM_PREFIX.length).match(/^([A-Za-z0-9_-]+)~\d+$/)?.[1];
+    if (!encoded) {
+      return undefined;
+    }
+    try {
+      const decoded = Buffer.from(encoded, 'base64url').toString('utf8');
+      return Buffer.from(decoded, 'utf8').toString('base64url') === encoded ? decoded : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const oldClaim = name.match(/^(.*)\.migration-source(?:-\d+)?$/);
+  if (!oldClaim?.[1]?.startsWith('.')) {
+    return undefined;
+  }
+  return oldClaim[1].slice(1) || undefined;
 }
 
 async function removeTree(path: string): Promise<void> {

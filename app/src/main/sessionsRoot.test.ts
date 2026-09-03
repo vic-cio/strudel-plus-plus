@@ -1,15 +1,17 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   defaultSessionsRoot,
+  LEGACY_MIGRATION_LOCK,
   LEGACY_MIGRATION_DIRECTORY,
   LEGACY_MIGRATION_MARKER,
   LEGACY_MIGRATION_MARKER_CONTENT,
   LEGACY_MIGRATION_TRANSACTION_MARKER,
+  LEGACY_MIGRATION_SOURCE_CLAIM_PREFIX,
   legacySessionsRoots,
   resolveSessionsRoot,
 } from './sessionsRoot';
@@ -62,6 +64,61 @@ describe('legacy session migration', () => {
       '{"beat":"intro.js"}\n',
     );
     await expect(stat(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('recovers a source claim left by an interrupted migration', async () => {
+    const legacy = join(home, 'Music', 'Strudel');
+    const source = join(legacy, 'recoverable-set');
+    const claim = join(legacy, `${LEGACY_MIGRATION_SOURCE_CLAIM_PREFIX}cmVjb3ZlcmFibGUtc2V0~1`);
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, 'intro.js'), 'intro');
+    await writeFile(join(source, '.strudel-live.json'), '{"beat":"intro.js"}\n');
+    await rename(source, claim);
+
+    await resolveSessionsRoot({ home });
+
+    await expect(readFile(join(defaultSessionsRoot(home), 'recoverable-set', 'intro.js'), 'utf8')).resolves.toBe(
+      'intro',
+    );
+    await expect(readFile(join(defaultSessionsRoot(home), 'recoverable-set', '.strudel-live.json'), 'utf8')).resolves.toBe(
+      '{"beat":"intro.js"}\n',
+    );
+    await expect(stat(claim)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not touch migration data while another process owns the root lock', async () => {
+    const root = defaultSessionsRoot(home);
+    const legacy = join(home, 'Music', 'Strudel');
+    await mkdir(join(legacy, 'untouched-set'), { recursive: true });
+    await writeFile(join(legacy, 'untouched-set', 'intro.js'), 'intro');
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, LEGACY_MIGRATION_LOCK), JSON.stringify({ pid: process.pid, token: 'active' }));
+
+    await expect(resolveSessionsRoot({ home })).rejects.toThrow(/migration is already in progress/i);
+    await expect(readFile(join(legacy, 'untouched-set', 'intro.js'), 'utf8')).resolves.toBe('intro');
+    await expect(stat(join(root, 'untouched-set'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('cleans an orphaned staging file while recovering the root in one startup pass', async () => {
+    const root = defaultSessionsRoot(home);
+    const stage = join(root, '.orphan.migration-stage');
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, 'orphan'), 'staged duplicate');
+    await writeFile(stage, 'staged duplicate');
+
+    await resolveSessionsRoot({ home });
+
+    await expect(stat(stage)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps a legacy directory named like shared harness content as a session', async () => {
+    const legacy = join(home, 'Music', 'Strudel');
+    await mkdir(join(legacy, 'AGENTS.md'), { recursive: true });
+    await writeFile(join(legacy, 'AGENTS.md', 'intro.js'), 'intro');
+
+    await resolveSessionsRoot({ home });
+
+    await expect(readFile(join(defaultSessionsRoot(home), 'AGENTS.md', 'intro.js'), 'utf8')).resolves.toBe('intro');
   });
 
   it('merges both legacy roots and preserves colliding sessions under a visible name', async () => {
