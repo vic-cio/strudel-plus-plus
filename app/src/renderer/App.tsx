@@ -103,7 +103,7 @@ export function App() {
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
   const draftStateRef = useRef<DraftState>({});
-  const pendingRenameRef = useRef<{ from: string; to: string }>();
+  const pendingRenameRef = useRef<{ from: string; to: string } | undefined>(undefined);
   const beatActivationRef = useRef(0);
   const diskChangeVersionRef = useRef(new Map<string, number>());
   const beatsRef = useRef<BeatSummary[]>([]);

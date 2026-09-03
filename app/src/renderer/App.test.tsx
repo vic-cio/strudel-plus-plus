@@ -31,7 +31,7 @@ const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(()
     toggle: vi.fn(),
     evaluate: vi.fn(),
     reevaluate: vi.fn(),
-    getCode: vi.fn(() => undefined),
+    getCode: vi.fn((): string | undefined => undefined),
     containerRef: { current: null },
     cps: 0.5,
     changeCps: vi.fn(),
