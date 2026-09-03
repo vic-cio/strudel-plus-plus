@@ -80,9 +80,9 @@ describe('legacy session migration', () => {
     await expect(readFile(join(defaultSessionsRoot(home), 'recoverable-set', 'intro.js'), 'utf8')).resolves.toBe(
       'intro',
     );
-    await expect(readFile(join(defaultSessionsRoot(home), 'recoverable-set', '.strudel-live.json'), 'utf8')).resolves.toBe(
-      '{"beat":"intro.js"}\n',
-    );
+    await expect(
+      readFile(join(defaultSessionsRoot(home), 'recoverable-set', '.strudel-live.json'), 'utf8'),
+    ).resolves.toBe('{"beat":"intro.js"}\n');
     await expect(stat(claim)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
