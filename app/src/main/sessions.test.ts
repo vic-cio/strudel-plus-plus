@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSessionStore } from './sessions';
 import { LEGACY_MIGRATION_DIRECTORY, LEGACY_MIGRATION_MARKER, LEGACY_MIGRATION_MARKER_CONTENT } from './sessionsRoot';
 
+const APPROVED_STARTER_BEAT = `// a new beat
+
+stack(
+  s("bd*2, ~ sd"),
+  s("hh*8").gain(0.4),
+)
+`;
+
 let root: string;
 
 beforeEach(async () => {
@@ -65,6 +73,16 @@ describe('createSessionStore', () => {
     await store.create('fresh');
     const [session] = await store.list();
     expect(session?.beats).toBe(1);
+    await expect(readFile(join(root, 'fresh', 'untitled.js'), 'utf8')).resolves.toBe(APPROVED_STARTER_BEAT);
+  });
+
+  it('removes a session through the store boundary', async () => {
+    const store = createSessionStore(root);
+    await store.create('discard-me');
+
+    await store.remove('discard-me');
+
+    await expect(store.list()).resolves.not.toContainEqual(expect.objectContaining({ name: 'discard-me' }));
   });
 
   it('refuses to create a session that already exists', async () => {

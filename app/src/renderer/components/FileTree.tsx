@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   DEFAULT_BEAT_SORT,
   isBeatSortMode,
@@ -7,8 +7,21 @@ import {
   type BeatSummary,
 } from '../../shared/beatSorting';
 
-type Draft = { kind: 'create' } | { kind: 'rename'; from: string } | { kind: 'confirm-delete'; name: string };
+export type FileTreeDraftAction =
+  | { kind: 'create' }
+  | { kind: 'rename'; from: string }
+  | { kind: 'confirm-delete'; name: string };
+export type FileTreeDraft =
+  | { kind: 'create'; value: string }
+  | { kind: 'rename'; from: string; value: string }
+  | { kind: 'confirm-delete'; name: string };
 type BeatInput = BeatSummary | string;
+type Menu = { name: string; left: number; top: number };
+type MenuAction = 'clone' | 'rename' | 'delete' | 'create';
+
+const MENU_WIDTH = 170;
+const MENU_ESTIMATED_HEIGHT = 120;
+const VIEWPORT_GUTTER = 4;
 
 type Props = {
   beats: BeatInput[];
@@ -21,6 +34,11 @@ type Props = {
   onCreate: (name: string) => void;
   onRename: (from: string, to: string) => void;
   onRemove: (name: string) => void;
+  onClone: (name: string) => void;
+  draft: FileTreeDraft | undefined;
+  onBeginDraft: (draft: FileTreeDraftAction) => void;
+  onChangeDraft: (draft: FileTreeDraft) => void;
+  onCancelDraft: () => void;
   onSortChange: (mode: BeatSortMode) => void;
   onReorder: (from: string, to: string, position?: 'before' | 'after') => void;
   onDismissError: () => void;
@@ -45,13 +63,18 @@ export function FileTree({
   onCreate,
   onRename,
   onRemove,
+  onClone,
+  draft,
+  onBeginDraft,
+  onChangeDraft,
+  onCancelDraft,
   onSortChange,
   onReorder,
   onDismissError,
 }: Props) {
-  const [draft, setDraft] = useState<Draft>();
-  const [value, setValue] = useState('');
+  const [menu, setMenu] = useState<Menu>();
   const input = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const dragged = useRef<string | undefined>(undefined);
 
   const beatSummaries = beats.map((beat) => (typeof beat === 'string' ? { name: beat, modifiedAt: 0 } : beat));
@@ -60,20 +83,108 @@ export function FileTree({
   useEffect(() => {
     input.current?.focus();
     input.current?.select();
-  }, [draft]);
+  }, [draft?.kind, draft?.kind === 'rename' ? draft.from : undefined]);
 
-  function begin(next: Draft) {
-    onDismissError();
-    setDraft(next);
-    setValue(next.kind === 'rename' ? next.from.replace(/\.js$/, '') : '');
-  }
+  const begin = useCallback(
+    (next: FileTreeDraftAction) => {
+      setMenu(undefined);
+      onDismissError();
+      onBeginDraft(next);
+    },
+    [onBeginDraft, onDismissError],
+  );
+
+  const openMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, name: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const left = Math.min(
+      Math.max(event.clientX, VIEWPORT_GUTTER),
+      Math.max(VIEWPORT_GUTTER, window.innerWidth - MENU_WIDTH),
+    );
+    const top = Math.min(
+      Math.max(event.clientY, VIEWPORT_GUTTER),
+      Math.max(VIEWPORT_GUTTER, window.innerHeight - MENU_ESTIMATED_HEIGHT - VIEWPORT_GUTTER),
+    );
+    setMenu({ name, left, top });
+  }, []);
+
+  const choose = useCallback(
+    (action: MenuAction) => {
+      if (!menu) {
+        return;
+      }
+      const name = menu.name;
+      setMenu(undefined);
+      switch (action) {
+        case 'clone':
+          onClone(name);
+          return;
+        case 'rename':
+          begin({ kind: 'rename', from: name });
+          return;
+        case 'delete':
+          begin({ kind: 'confirm-delete', name });
+          return;
+        case 'create':
+          begin({ kind: 'create' });
+          return;
+        default: {
+          const _exhaustive: never = action;
+          return _exhaustive;
+        }
+      }
+    },
+    [begin, menu, onClone],
+  );
+
+  useEffect(() => {
+    if (!menu) {
+      return;
+    }
+    menuRef.current?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || !menuRef.current?.contains(target)) {
+        setMenu(undefined);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMenu(undefined);
+      }
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menu]);
+
+  useLayoutEffect(() => {
+    if (!menu) {
+      return;
+    }
+    const height = menuRef.current?.offsetHeight ?? 0;
+    if (!height) {
+      return;
+    }
+    const top = Math.min(menu.top, Math.max(VIEWPORT_GUTTER, window.innerHeight - height - VIEWPORT_GUTTER));
+    if (top !== menu.top) {
+      setMenu({ ...menu, top });
+    }
+  }, [menu]);
 
   function commit() {
     if (!draft) {
       return;
     }
-    const name = value.trim();
-    setDraft(undefined);
+    if (draft.kind === 'confirm-delete') {
+      return;
+    }
+    const name = draft.value.trim();
+    onCancelDraft();
     if (!name) {
       return;
     }
@@ -88,15 +199,19 @@ export function FileTree({
     <input
       ref={input}
       className="tree-input"
-      value={value}
+      value={draft && draft.kind !== 'confirm-delete' ? draft.value : ''}
       placeholder="name"
-      onChange={(event) => setValue(event.target.value)}
+      onChange={(event) => {
+        if (draft && draft.kind !== 'confirm-delete') {
+          onChangeDraft({ ...draft, value: event.target.value });
+        }
+      }}
       onBlur={commit}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
           commit();
         } else if (event.key === 'Escape') {
-          setDraft(undefined);
+          onCancelDraft();
         }
       }}
     />
@@ -123,15 +238,7 @@ export function FileTree({
               <option value="manual">Manual</option>
             </select>
           </label>
-          <button title="New beat" onClick={() => begin({ kind: 'create' })}>
-            +
-          </button>
-          <button title="Rename" disabled={!open} onClick={() => open && begin({ kind: 'rename', from: open })}>
-            ~
-          </button>
-          <button title="Delete" disabled={!open} onClick={() => open && begin({ kind: 'confirm-delete', name: open })}>
-            −
-          </button>
+          <span className="tree-shortcuts">⌘N new · F2 rename · ⌘⌫ delete</span>
         </span>
       </header>
       <div className="pane-body">
@@ -151,6 +258,7 @@ export function FileTree({
               key={name}
               className="tree-row"
               draggable={sortMode === 'manual'}
+              onContextMenu={(event) => openMenu(event, name)}
               onDragStart={() => {
                 dragged.current = name;
               }}
@@ -210,19 +318,43 @@ export function FileTree({
                   <button
                     onClick={() => {
                       const deletedName = draft.name;
-                      setDraft(undefined);
+                      onCancelDraft();
                       onRemove(deletedName);
                     }}
                   >
                     delete
                   </button>
-                  <button onClick={() => setDraft(undefined)}>keep</button>
+                  <button onClick={onCancelDraft}>keep</button>
                 </p>
               )}
             </div>
           );
         })}
         {draft?.kind === 'create' && <div className="tree-item">{editor}</div>}
+        {menu && (
+          <div
+            ref={menuRef}
+            className="tree-menu"
+            role="menu"
+            aria-label={`Beat actions for ${menu.name}`}
+            tabIndex={-1}
+            style={{ left: `${menu.left}px`, top: `${menu.top}px` }}
+          >
+            <div className="tree-menu-title">{menu.name}</div>
+            <button role="menuitem" onClick={() => choose('clone')}>
+              clone
+            </button>
+            <button role="menuitem" onClick={() => choose('rename')}>
+              rename
+            </button>
+            <button role="menuitem" onClick={() => choose('delete')}>
+              delete
+            </button>
+            <button role="menuitem" onClick={() => choose('create')}>
+              add new beat
+            </button>
+          </div>
+        )}
         {error && (
           <p className="tree-error" onClick={onDismissError}>
             {error}

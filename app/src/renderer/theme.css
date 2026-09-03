@@ -188,6 +188,29 @@ button:disabled {
   border: none;
   color: var(--ink-soft);
 }
+.picker-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid transparent;
+}
+.picker-row:hover {
+  background: var(--ground-raised);
+}
+.picker-row .picker-item {
+  flex: 1;
+  min-width: 0;
+}
+.picker-delete {
+  flex: none;
+  width: 28px;
+  padding: 1px 4px;
+  color: var(--ink-faint);
+}
+.picker-delete:hover:not(:disabled) {
+  color: var(--rust);
+  border-color: var(--line-strong);
+  background: var(--ground-raised);
+}
 .picker-item[aria-current='true'] {
   background: var(--ground-raised);
   color: var(--ink);
@@ -468,6 +491,52 @@ body[data-resizing='true'][data-resize-axis='row'] {
 }
 .tree-sort select:focus {
   border-color: var(--gold);
+}
+.tree-shortcuts {
+  color: var(--ink-faint);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.tree-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 3px 0;
+  border: 1px solid var(--line-strong);
+  background: var(--ground);
+  box-shadow: 8px 8px 0 rgba(34, 17, 9, 0.25);
+}
+.tree-menu-title {
+  overflow: hidden;
+  padding: 4px 10px 3px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+.tree-menu button {
+  padding: 4px 10px;
+  text-align: left;
+  color: var(--ink-soft);
+  border: none;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.tree-menu button:hover {
+  color: var(--ink);
+  background: var(--ground-raised);
+}
+.tree-menu button:first-of-type {
+  color: var(--gold);
 }
 
 /* The naming row has to line up with the rows around it, so it borrows their

@@ -8,13 +8,14 @@ import { augmentPath, loginShellPath } from './env';
 import { ensurePtyHelper } from './ptyHelper';
 import { createMidiOut, type MidiMessage } from './midi';
 import { createOscSender, type OscMessage } from './oscSender';
-import { createSessionStore, type SessionState } from './sessions';
+import { createSessionStore } from './sessions';
 import { resolveSessionsRoot } from './sessionsRoot';
 import { createPtyHost } from './pty';
 import { watchBeats } from './watcher';
 import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
+import type { SessionOpenResult, SessionState } from '../shared/session';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html',
@@ -103,6 +104,16 @@ async function main() {
   const osc = createOscSender();
   const midi = createMidiOut();
   let session: ReturnType<typeof ptyHost.start> | undefined;
+  let sessionTransitionTail: Promise<void> = Promise.resolve();
+
+  function queueSessionTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const current = sessionTransitionTail.then(operation, operation);
+    sessionTransitionTail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
+  }
 
   const window = new BrowserWindow({
     width: 1600,
@@ -225,33 +236,84 @@ async function main() {
   ipcMain.on(CH.midiSend, (_event, messages: MidiMessage[]) => midi.send(messages));
   ipcMain.handle(CH.midiPorts, () => midi.ports());
 
-  async function openSession(name: string) {
+  async function openSession(name: string): Promise<SessionOpenResult> {
+    if (!(await sessions.has(name))) {
+      throw new Error(`Cannot open missing session: ${name}`);
+    }
     const folder = join(root, name);
+    const nextStore = createBeatStore(folder);
+    const nextState = await sessions.getState(name);
+    const nextBeats = await nextStore.listInfo();
+    const nextBeat =
+      nextState.beat && nextBeats.some((beat) => beat.name === nextState.beat) ? nextState.beat : nextBeats[0]?.name;
+    const nextContent = nextBeat ? await nextStore.read(nextBeat) : undefined;
     const previousBeatsRoot = config.beatsRoot;
-    config.beatsRoot = folder;
-    let harness: string | undefined;
+    const previousActive = active;
+    const previousStore = store;
+    const previousWatcher = watcher;
+    const previousSession = session;
+    const previousHarness = lastHarness;
+    let harnessRestarted = false;
+    let nextWatcher: FSWatcher | undefined;
     try {
-      harness = restartHarness();
+      config.beatsRoot = folder;
+      harnessRestarted = true;
+      const harness = restartHarness();
+      await sessions.touch(name);
+      nextWatcher = watchBeats(folder, (change) => window.webContents.send(CH.beatsChanged, change));
+      await previousWatcher?.close();
+      active = name;
+      store = nextStore;
+      watcher = nextWatcher;
+      return {
+        name,
+        folder,
+        harness,
+        state: nextState,
+        beats: nextBeats,
+        beat: nextBeat,
+        content: nextContent,
+      };
     } catch (error) {
       config.beatsRoot = previousBeatsRoot;
+      active = previousActive;
+      store = previousStore;
+      watcher = previousWatcher;
+      if (nextWatcher) {
+        await nextWatcher.close().catch(() => undefined);
+      }
+      if (harnessRestarted && previousHarness) {
+        lastHarness = previousHarness;
+        try {
+          restartHarness();
+        } catch {
+          session = undefined;
+        }
+      } else {
+        session = previousSession;
+      }
       throw error;
     }
-    active = name;
-    store = createBeatStore(folder);
-    await sessions.touch(name);
-    await watcher?.close();
-    watcher = watchBeats(folder, (change) => window.webContents.send(CH.beatsChanged, change));
-    return { name, folder, harness };
   }
 
   ipcMain.handle(CH.sessionsRoot, () => root);
   ipcMain.handle(CH.sessionsList, () => sessions.list());
   ipcMain.handle(CH.sessionsActive, () => active);
-  ipcMain.handle(CH.sessionsCreate, async (_event, name: string) => {
-    await sessions.create(name);
-    return openSession(name);
-  });
-  ipcMain.handle(CH.sessionsOpen, (_event, name: string) => openSession(name));
+  ipcMain.handle(CH.sessionsCreate, (_event, name: string) =>
+    queueSessionTransition(async () => {
+      await sessions.create(name);
+      return openSession(name);
+    }),
+  );
+  ipcMain.handle(CH.sessionsRemove, (_event, name: string) =>
+    queueSessionTransition(async () => {
+      if (name === active) {
+        throw new Error(`Cannot delete the active session: ${name}`);
+      }
+      return sessions.remove(name);
+    }),
+  );
+  ipcMain.handle(CH.sessionsOpen, (_event, name: string) => queueSessionTransition(() => openSession(name)));
   ipcMain.handle(CH.sessionsState, (_event, name: string) => sessions.getState(name));
   ipcMain.handle(CH.sessionsSetState, (_event, name: string, state: SessionState) => sessions.setState(name, state));
 

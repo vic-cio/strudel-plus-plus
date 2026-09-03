@@ -10,7 +10,7 @@ import { App } from './App';
  * follow the EDIT buffer at the moment it moves, because a harness reads that
  * pointer from .session.json and edits exactly what it names.
  */
-const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(() => {
+const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } = vi.hoisted(() => {
   type WrittenState = { beat?: string | null; cpsByBeat?: Record<string, number>; dock?: unknown };
   const setStateMock = vi.fn(async (_session: string, _state: WrittenState) => {});
   // The watcher handler is captured so tests can play harness: write to disk,
@@ -38,23 +38,42 @@ const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(()
     releaseCps: vi.fn(),
   };
   const codeChange: { current: ((code: string) => void) | undefined } = { current: undefined };
+  type MockSessionState = {
+    beat?: string | null;
+    dock?: { split?: boolean; panes?: { tabs?: string[]; active?: string }[] };
+  };
+  const sessionState = vi.fn(async (): Promise<MockSessionState> => ({ beat: 'we begin.js' }));
+  const openSessionResult = async (name: string) => {
+    const state = await sessionState();
+    const beats = [
+      { name: '808ing.js', modifiedAt: 1 },
+      { name: 'we begin.js', modifiedAt: 2 },
+    ];
+    const beat = state.beat && beats.some((item) => item.name === state.beat) ? state.beat : beats[0]?.name;
+    return {
+      name,
+      folder: `/sessions-root/${name}`,
+      harness: 'shell',
+      state,
+      beats,
+      beat,
+      content: beat ? `// ${beat}` : undefined,
+    };
+  };
   const desktop = {
     sessions: {
       root: vi.fn(async () => '/sessions-root'),
       list: vi.fn(async () => [{ name: 'we cook', beats: 2, usedAt: 1 }]),
       active: vi.fn(async () => 'we cook'),
-      create: vi.fn(async (name: string) => ({ name, folder: `/sessions-root/${name}` })),
-      open: vi.fn(async (name: string) => ({ name, folder: `/sessions-root/${name}` })),
-      state: vi.fn(
-        async (): Promise<{ beat?: string | null; dock?: Record<string, unknown> }> => ({
-          beat: 'we begin.js',
-        }),
-      ),
+      create: vi.fn(openSessionResult),
+      remove: vi.fn(async () => {}),
+      open: vi.fn(openSessionResult),
+      state: sessionState,
       setState: setStateMock,
     },
     beats: {
       root: vi.fn(async () => '/sessions-root/we cook'),
-      list: vi.fn(async () => []),
+      list: vi.fn(async (): Promise<string[]> => []),
       listInfo: vi.fn(async () => [
         { name: '808ing.js', modifiedAt: 1 },
         { name: 'we begin.js', modifiedAt: 2 },
@@ -80,7 +99,7 @@ const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(()
       onExit: vi.fn(() => () => {}),
     },
   };
-  return { desktop, setStateMock, changeHandler, repl, codeChange };
+  return { desktop, setStateMock, changeHandler, repl, codeChange, sessionState };
 });
 
 vi.mock('./desktop', () => ({ desktop }));
@@ -136,7 +155,7 @@ beforeEach(() => {
     { name: '808ing.js', modifiedAt: 1 },
     { name: 'we begin.js', modifiedAt: 2 },
   ]);
-  desktop.sessions.state.mockResolvedValue({ beat: 'we begin.js' });
+  sessionState.mockResolvedValue({ beat: 'we begin.js' });
   desktop.beats.read.mockClear();
   desktop.beats.read.mockImplementation(async (name: string) => `// ${name}`);
   desktop.beats.remove.mockClear();
@@ -223,8 +242,9 @@ describe('App session state', () => {
     await openSessionFromPicker(user);
     await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
 
-    // Rename via the tree: ~ opens the input pre-filled with the open beat.
-    await user.click(screen.getByTitle('Rename'));
+    // Rename via the row context menu; it opens the input pre-filled with the open beat.
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
     const input = await screen.findByDisplayValue('we begin');
     await user.clear(input);
     await user.type(input, 'day one{Enter}');
@@ -241,7 +261,8 @@ describe('App session state', () => {
     // Both beats go away; the app must not leave a beat name that no longer
     // resolves on disk.
     desktop.beats.listInfo.mockResolvedValue([]);
-    await user.click(screen.getByTitle('Delete'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
     await user.click(await screen.findByText('delete'));
 
     await waitFor(() => expect(persistedBeats().at(-1)).toBeNull());
@@ -251,7 +272,7 @@ describe('App session state', () => {
   it('heals a stale persisted pointer on open by adopting a real beat', async () => {
     // The session was left pointing at a beat that no longer exists — exactly
     // the state a harness reads and edits the wrong file from.
-    desktop.sessions.state.mockResolvedValue({ beat: 'deleted-beat.js' });
+    sessionState.mockResolvedValue({ beat: 'deleted-beat.js' });
     const user = userEvent.setup();
     render(<App />);
     await openSessionFromPicker(user);
@@ -290,6 +311,243 @@ describe('App session state', () => {
       const maps = setStateMock.mock.calls.filter((call) => 'cpsByBeat' in call[1]);
       expect(maps.length).toBeGreaterThan(0);
     });
+  });
+
+  it('commits a session from the atomic open payload', async () => {
+    desktop.beats.read.mockRejectedValue(new Error('mutable store read raced'));
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    expect(screen.getByTitle('Switch session').textContent).toContain('we cook');
+    expect(persistedBeats().at(-1)).toBe('we begin.js');
+  });
+
+  it('clones the focused beat from the titlebar action', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    desktop.beats.list.mockResolvedValue(['we begin.js', '808ing.js']);
+    desktop.beats.create.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'clone' }));
+
+    await waitFor(() => expect(desktop.beats.create).toHaveBeenCalledWith('we begin-2.js', '// we begin.js'));
+  });
+
+  it('clones a non-focused row from disk', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    desktop.beats.list.mockResolvedValue(['we begin.js', '808ing.js']);
+    desktop.beats.read.mockClear();
+    desktop.beats.create.mockClear();
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'clone' }));
+
+    await waitFor(() => expect(desktop.beats.create).toHaveBeenCalledWith('808ing-2.js', '// 808ing.js'));
+    expect(desktop.beats.read).toHaveBeenCalledWith('808ing.js');
+  });
+
+  it('clones the focused row with its current unsaved buffer from the context menu', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await act(async () => {
+      codeChange.current?.('// focused unsaved buffer');
+    });
+    desktop.beats.list.mockResolvedValue(['we begin.js', '808ing.js']);
+    desktop.beats.create.mockClear();
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'clone' }));
+
+    await waitFor(() =>
+      expect(desktop.beats.create).toHaveBeenCalledWith('we begin-2.js', '// focused unsaved buffer'),
+    );
+  });
+
+  it('keeps the beat shortcuts working when the sidebar is collapsed', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    await user.click(screen.getByTitle('Hide beats'));
+    fireEvent.keyDown(window, { key: 'F2' });
+    expect(await screen.findByDisplayValue('we begin')).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await user.click(screen.getByTitle('Hide beats'));
+    fireEvent.keyDown(window, { key: 'Backspace', metaKey: true });
+    expect(await screen.findByText('delete we begin?')).toBeTruthy();
+  });
+
+  it('does not run beat shortcuts while the session picker is open', async () => {
+    render(<App />);
+    fireEvent.keyDown(window, { key: 'n', metaKey: true });
+
+    expect(screen.queryByPlaceholderText('name')).toBeNull();
+    expect(screen.queryByPlaceholderText('session name')).toBeNull();
+  });
+
+  it('deletes the default session from the session picker', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('we cook');
+    desktop.sessions.list.mockResolvedValueOnce([]);
+
+    await user.click(screen.getByRole('button', { name: 'Delete session we cook' }));
+
+    await waitFor(() => expect(desktop.sessions.remove).toHaveBeenCalledWith('we cook'));
+    expect(confirm).toHaveBeenCalledWith('Delete session "we cook"?');
+    confirm.mockRestore();
+  });
+
+  it('finishes a clone before switching the session', async () => {
+    const user = userEvent.setup();
+    desktop.sessions.list.mockResolvedValue([
+      { name: 'we cook', beats: 2, usedAt: 1 },
+      { name: 'other session', beats: 1, usedAt: 2 },
+    ]);
+    render(<App />);
+    await openSessionFromPicker(user);
+    desktop.sessions.open.mockClear();
+    desktop.beats.create.mockClear();
+
+    let listStarted!: () => void;
+    let releaseList!: (beats: string[]) => void;
+    const started = new Promise<void>((resolve) => {
+      listStarted = resolve;
+    });
+    const listed = new Promise<string[]>((resolve) => {
+      releaseList = resolve;
+    });
+    desktop.beats.list.mockImplementationOnce(async () => {
+      listStarted();
+      return listed;
+    });
+
+    await user.click(screen.getByRole('button', { name: 'clone' }));
+    await started;
+    await user.click(screen.getByTitle('Switch session'));
+    await user.click(screen.getByText('other session'));
+    expect(desktop.sessions.open).not.toHaveBeenCalled();
+
+    releaseList(['we begin.js', '808ing.js']);
+    await waitFor(() => expect(desktop.sessions.open).toHaveBeenCalledWith('other session'));
+    expect(desktop.beats.create).toHaveBeenCalledWith('we begin-2.js', '// we begin.js');
+  });
+
+  it('keeps inactive-row rename and delete from moving the active pointer', async () => {
+    const user = userEvent.setup();
+    desktop.beats.rename.mockClear();
+    desktop.beats.remove.mockClear();
+    desktop.beats.listInfo.mockImplementation(async () => [
+      { name: desktop.beats.rename.mock.calls.length > 0 ? 'drums.js' : '808ing.js', modifiedAt: 1 },
+      { name: 'we begin.js', modifiedAt: 2 },
+    ]);
+    render(<App />);
+    await openSessionFromPicker(user);
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
+    await user.clear(screen.getByPlaceholderText('name'));
+    await user.type(screen.getByPlaceholderText('name'), 'drums{Enter}');
+    await waitFor(() => expect(desktop.beats.rename).toHaveBeenCalledWith('808ing.js', 'drums.js'));
+    expect(persistedBeats().at(-1)).toBe('we begin.js');
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'drums.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
+    await user.click(screen.getByText('delete'));
+    await waitFor(() => expect(desktop.beats.remove).toHaveBeenCalledWith('drums.js'));
+    expect(persistedBeats().at(-1)).toBe('we begin.js');
+  });
+
+  it('moves away if an inactive row becomes open while it is being deleted', async () => {
+    const user = userEvent.setup();
+    let listedBeats = [
+      { name: '808ing.js', modifiedAt: 1 },
+      { name: 'we begin.js', modifiedAt: 2 },
+    ];
+    desktop.beats.listInfo.mockImplementation(async () => listedBeats);
+    let removalStarted!: () => void;
+    let releaseRemoval!: () => void;
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    desktop.beats.remove.mockImplementationOnce(async () => {
+      removalStarted();
+      await released;
+      listedBeats = [{ name: 'we begin.js', modifiedAt: 2 }];
+    });
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
+    await user.click(screen.getByText('delete'));
+    await started;
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+
+    releaseRemoval();
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
+  });
+
+  it('does not adopt an inactive beat after its deletion wins the open race', async () => {
+    const user = userEvent.setup();
+    let listedBeats = [
+      { name: '808ing.js', modifiedAt: 1 },
+      { name: 'we begin.js', modifiedAt: 2 },
+    ];
+    desktop.beats.listInfo.mockImplementation(async () => listedBeats);
+    let removalStarted!: () => void;
+    let releaseRemoval!: () => void;
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    desktop.beats.remove.mockImplementationOnce(async () => {
+      removalStarted();
+      await released;
+      listedBeats = [{ name: 'we begin.js', modifiedAt: 2 }];
+    });
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    let readStarted!: () => void;
+    let releaseRead!: () => void;
+    const readBegan = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    const readReleased = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    desktop.beats.read.mockImplementation(async (name: string) => {
+      if (name === '808ing.js') {
+        readStarted();
+        await readReleased;
+      }
+      return `// ${name}`;
+    });
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'delete' }));
+    await user.click(screen.getByText('delete'));
+    await started;
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    releaseRemoval();
+    await readBegan;
+    releaseRead();
+
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
   });
 });
 
@@ -518,7 +776,8 @@ describe('App beat drafts', () => {
     render(<App />);
     await openSessionFromPicker(user);
     await editCurrentBeat('// draft for we begin');
-    await user.click(screen.getByTitle('Rename'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
     const input = await screen.findByDisplayValue('we begin');
     desktop.beats.listInfo.mockResolvedValue([
       { name: 'day one.js', modifiedAt: 2 },
@@ -575,7 +834,7 @@ describe('App plugin dock', () => {
   });
 
   it('restores the split dock the session was left in', async () => {
-    desktop.sessions.state.mockResolvedValue({
+    sessionState.mockResolvedValue({
       beat: 'we begin.js',
       dock: { split: true, panes: [{ tabs: ['eq'], active: 'eq' }, { tabs: [] }] },
     });
@@ -589,7 +848,7 @@ describe('App plugin dock', () => {
   });
 
   it('forgets dock tabs for plugins that no longer exist', async () => {
-    desktop.sessions.state.mockResolvedValue({
+    sessionState.mockResolvedValue({
       beat: 'we begin.js',
       dock: { split: false, panes: [{ tabs: ['ghost'] }] },
     });
@@ -643,7 +902,8 @@ describe('App harness-edit hardening', () => {
     expect(await screen.findByText('editor exploded')).toBeTruthy();
     // The disk content was still adopted into the buffer before the editor
     // threw: the next attempt works from the new content, not the old.
-    expect(screen.getByTitle('Rename')).toBeTruthy();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    expect(screen.getByRole('menuitem', { name: 'rename' })).toBeTruthy();
   });
 
   it('clears a stale REPL parse error when a harness write lands while stopped', async () => {

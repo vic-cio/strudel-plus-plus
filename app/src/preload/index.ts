@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { CH, type BeatChange } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
-import type { BeatSortMode, BeatSummary } from '../shared/beatSorting';
-import type { DockState } from '../shared/dockState';
+import type { BeatSummary } from '../shared/beatSorting';
+import type { SessionOpenResult, SessionState } from '../shared/session';
 
 /**
  * The whole surface the renderer gets. Nothing here takes a path the renderer
@@ -14,27 +14,12 @@ const api = {
     root: (): Promise<string> => ipcRenderer.invoke(CH.sessionsRoot),
     list: (): Promise<{ name: string; beats: number; usedAt: number }[]> => ipcRenderer.invoke(CH.sessionsList),
     active: (): Promise<string> => ipcRenderer.invoke(CH.sessionsActive),
-    create: (name: string): Promise<{ name: string; folder: string }> => ipcRenderer.invoke(CH.sessionsCreate, name),
-    open: (name: string): Promise<{ name: string; folder: string }> => ipcRenderer.invoke(CH.sessionsOpen, name),
-    state: (
-      name: string,
-    ): Promise<{
-      beat?: string | null;
-      cpsByBeat?: Record<string, number>;
-      beatSort?: BeatSortMode;
-      manualBeatOrder?: string[];
-      dock?: DockState;
-    }> => ipcRenderer.invoke(CH.sessionsState, name),
-    setState: (
-      name: string,
-      state: {
-        beat?: string | null;
-        cpsByBeat?: Record<string, number>;
-        beatSort?: BeatSortMode;
-        manualBeatOrder?: string[];
-        dock?: DockState;
-      },
-    ): Promise<void> => ipcRenderer.invoke(CH.sessionsSetState, name, state),
+    create: (name: string): Promise<SessionOpenResult> => ipcRenderer.invoke(CH.sessionsCreate, name),
+    remove: (name: string): Promise<void> => ipcRenderer.invoke(CH.sessionsRemove, name),
+    open: (name: string): Promise<SessionOpenResult> => ipcRenderer.invoke(CH.sessionsOpen, name),
+    state: (name: string): Promise<SessionState> => ipcRenderer.invoke(CH.sessionsState, name),
+    setState: (name: string, state: SessionState): Promise<void> =>
+      ipcRenderer.invoke(CH.sessionsSetState, name, state),
   },
   beats: {
     root: (): Promise<string> => ipcRenderer.invoke(CH.beatsRoot),

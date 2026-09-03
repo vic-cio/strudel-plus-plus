@@ -54,4 +54,44 @@ describe('seedDefaultSession', () => {
     const sessions = await store.list();
     expect(sessions.map((session) => session.name)).toEqual([DEFAULT_SESSION_NAME]);
   });
+
+  it('does not resurrect the default after it is deliberately removed', async () => {
+    const store = createSessionStore(root);
+    await store.list();
+    await store.remove(DEFAULT_SESSION_NAME);
+
+    await expect(store.list()).resolves.toEqual([]);
+  });
+
+  it('keeps a legacy default deleted through the store boundary', async () => {
+    await mkdir(join(root, DEFAULT_SESSION_NAME));
+    await writeFile(join(root, DEFAULT_SESSION_NAME, 'we begin.js'), '// legacy');
+    const store = createSessionStore(root);
+
+    await expect(store.list()).resolves.toEqual([expect.objectContaining({ name: DEFAULT_SESSION_NAME, beats: 1 })]);
+    await store.remove(DEFAULT_SESSION_NAME);
+
+    await expect(store.list()).resolves.toEqual([]);
+  });
+
+  it('serializes first listing with default deletion', async () => {
+    const store = createSessionStore(root);
+    await Promise.all([store.list(), store.remove(DEFAULT_SESSION_NAME)]);
+
+    await expect(store.list()).resolves.toEqual([]);
+  });
+
+  it('refuses to remove root-owned files or hidden entries', async () => {
+    await writeFile(join(root, 'AGENTS.md'), 'keep');
+    await writeFile(join(root, '.default-session-deleted'), 'keep');
+    await writeFile(join(root, 'notes.txt'), 'keep');
+    const store = createSessionStore(root);
+
+    await expect(store.remove('AGENTS.md')).rejects.toThrow(/visible session directory/i);
+    await expect(store.remove('.default-session-deleted')).rejects.toThrow(/visible session directory/i);
+    await expect(store.remove('notes.txt')).rejects.toThrow(/visible session directory/i);
+    await expect(readFile(join(root, 'AGENTS.md'), 'utf8')).resolves.toBe('keep');
+    await expect(readFile(join(root, '.default-session-deleted'), 'utf8')).resolves.toBe('keep');
+    await expect(readFile(join(root, 'notes.txt'), 'utf8')).resolves.toBe('keep');
+  });
 });

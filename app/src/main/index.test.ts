@@ -6,11 +6,13 @@ const listeners = new Map<string, (...args: any[]) => unknown>();
 
 const ptyStart = vi.fn();
 const ptyKill = vi.fn();
+const beatStoreListInfo = vi.fn(async (): Promise<{ name: string; modifiedAt: number }[]> => []);
+const beatStoreRead = vi.fn();
 
 const beatStoreFactory = vi.fn(() => ({
   list: vi.fn(async () => []),
-  listInfo: vi.fn(async () => []),
-  read: vi.fn(),
+  listInfo: beatStoreListInfo,
+  read: beatStoreRead,
   write: vi.fn(),
   create: vi.fn(),
   rename: vi.fn(),
@@ -18,6 +20,8 @@ const beatStoreFactory = vi.fn(() => ({
 }));
 
 const sessionsTouch = vi.fn(async () => undefined);
+const sessionsHas = vi.fn(async () => true);
+const sessionsRemove = vi.fn(async () => undefined);
 const watcherClose = vi.fn(async () => undefined);
 const watchBeatsMock = vi.fn(() => ({ close: watcherClose }));
 
@@ -59,7 +63,9 @@ vi.mock('./oscSender', () => ({ createOscSender: () => ({ send: vi.fn(), close: 
 vi.mock('./sessions', () => ({
   createSessionStore: () => ({
     list: vi.fn(async () => []),
+    has: sessionsHas,
     create: vi.fn(async () => undefined),
+    remove: sessionsRemove,
     touch: sessionsTouch,
     getState: vi.fn(async () => ({})),
     setState: vi.fn(async () => undefined),
@@ -77,6 +83,12 @@ describe('openSession', () => {
     process.env.STRUDEL_BEATS_DIR = '/tmp/strudel-index-test-root';
     ptyStart.mockReset();
     ptyStart.mockReturnValue({ write: vi.fn(), resize: vi.fn(), kill: vi.fn() });
+    beatStoreListInfo.mockReset();
+    beatStoreListInfo.mockResolvedValue([]);
+    beatStoreRead.mockReset();
+    sessionsHas.mockReset();
+    sessionsHas.mockResolvedValue(true);
+    sessionsRemove.mockReset();
     vi.resetModules();
     const mod = await import('./index');
     await mod.ready;
@@ -99,7 +111,7 @@ describe('openSession', () => {
     // The failed restart must not have left the main process pointed at a
     // session the renderer never adopted.
     expect(config.beatsRoot).toBe(rootBeforeSwitch);
-    expect(beatStoreFactory).toHaveBeenCalledTimes(1); // only the initial root store, never the new session's
+    expect(beatStoreFactory).toHaveBeenCalledTimes(2);
     expect(sessionsTouch).not.toHaveBeenCalled();
     expect(watchBeatsMock).not.toHaveBeenCalled();
 
@@ -110,15 +122,146 @@ describe('openSession', () => {
   it('adopts the new session once the harness restart succeeds', async () => {
     const ptyStartHandler = handlers.get(CH.ptyStart)!;
     await ptyStartHandler({}, 'shell', 80, 24);
+    beatStoreListInfo.mockResolvedValueOnce([{ name: 'intro.js', modifiedAt: 1 }]);
+    beatStoreRead.mockResolvedValueOnce('// intro.js');
 
     const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
     const result = await sessionsOpenHandler({}, 'new-session');
 
-    expect(result).toMatchObject({ name: 'new-session' });
+    expect(result).toMatchObject({
+      name: 'new-session',
+      beats: [{ name: 'intro.js', modifiedAt: 1 }],
+      beat: 'intro.js',
+      content: '// intro.js',
+    });
     expect(sessionsTouch).toHaveBeenCalledWith('new-session');
     expect(watchBeatsMock).toHaveBeenCalled();
 
     const activeHandler = handlers.get(CH.sessionsActive)!;
     expect(await activeHandler({})).toBe('new-session');
+  });
+
+  it('hydrates the target before restarting the existing harness', async () => {
+    const ptyStartHandler = handlers.get(CH.ptyStart)!;
+    await ptyStartHandler({}, 'shell', 80, 24);
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    ptyKill.mockClear();
+    sessionsTouch.mockClear();
+    beatStoreListInfo.mockResolvedValueOnce([{ name: 'intro.js', modifiedAt: 1 }]);
+    beatStoreRead.mockRejectedValueOnce(new Error('beat disappeared'));
+
+    await expect(sessionsOpenHandler({}, 'candidate-session')).rejects.toThrow('beat disappeared');
+
+    expect(ptyKill).not.toHaveBeenCalled();
+    expect(sessionsTouch).not.toHaveBeenCalled();
+    expect(await handlers.get(CH.sessionsActive)!({})).toBe('active-session');
+  });
+
+  it('guards deletion of the active session before reaching the store', async () => {
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+
+    const sessionsRemoveHandler = handlers.get(CH.sessionsRemove)!;
+    await expect(sessionsRemoveHandler({}, 'active-session')).rejects.toThrow(/active session/i);
+    expect(sessionsRemove).not.toHaveBeenCalled();
+  });
+
+  it('deletes an inactive session through the guarded seam', async () => {
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+
+    const sessionsRemoveHandler = handlers.get(CH.sessionsRemove)!;
+    await sessionsRemoveHandler({}, 'default-session');
+
+    expect(sessionsRemove).toHaveBeenCalledWith('default-session');
+  });
+
+  it('serializes opening a session behind an in-flight deletion of that session', async () => {
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    sessionsRemove.mockClear();
+    sessionsTouch.mockClear();
+
+    let removalStarted!: () => void;
+    let releaseRemoval!: () => void;
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    sessionsRemove.mockImplementationOnce(async () => {
+      removalStarted();
+      await released;
+    });
+
+    const sessionsRemovePromise = handlers.get(CH.sessionsRemove)!({}, 'candidate-session');
+    await started;
+    const sessionsOpenPromise = sessionsOpenHandler({}, 'candidate-session');
+
+    await Promise.resolve();
+    expect(sessionsTouch).not.toHaveBeenCalled();
+
+    releaseRemoval();
+    await sessionsRemovePromise;
+    await sessionsOpenPromise;
+    expect(sessionsTouch).toHaveBeenCalledWith('candidate-session');
+  });
+
+  it('does not restart the harness when a queued open targets a deleted session', async () => {
+    const ptyStartHandler = handlers.get(CH.ptyStart)!;
+    await ptyStartHandler({}, 'shell', 80, 24);
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    ptyKill.mockClear();
+    sessionsHas.mockClear();
+    sessionsTouch.mockClear();
+
+    let removalStarted!: () => void;
+    let releaseRemoval!: () => void;
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    sessionsRemove.mockImplementationOnce(async () => {
+      removalStarted();
+      await released;
+      sessionsHas.mockResolvedValue(false);
+    });
+
+    const sessionsRemovePromise = handlers.get(CH.sessionsRemove)!({}, 'candidate-session');
+    await started;
+    const sessionsOpenPromise = sessionsOpenHandler({}, 'candidate-session');
+    releaseRemoval();
+
+    await sessionsRemovePromise;
+    await expect(sessionsOpenPromise).rejects.toThrow(/missing session/i);
+    expect(ptyKill).not.toHaveBeenCalled();
+    expect(sessionsTouch).not.toHaveBeenCalled();
+    const activeHandler = handlers.get(CH.sessionsActive)!;
+    expect(await activeHandler({})).toBe('active-session');
+  });
+
+  it('restores the previous session and harness if opening fails after restart', async () => {
+    const ptyStartHandler = handlers.get(CH.ptyStart)!;
+    await ptyStartHandler({}, 'shell', 80, 24);
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    const config = ptyStart.mock.calls.at(-1)![2];
+    ptyKill.mockClear();
+    ptyStart.mockClear();
+    sessionsTouch.mockClear();
+    sessionsTouch.mockRejectedValueOnce(new Error('cannot touch target'));
+
+    await expect(sessionsOpenHandler({}, 'candidate-session')).rejects.toThrow('cannot touch target');
+
+    expect(config.beatsRoot).toBe('/tmp/strudel-index-test-root/active-session');
+    expect(ptyKill).toHaveBeenCalledTimes(2);
+    expect(ptyStart).toHaveBeenCalledTimes(2);
+    expect(await handlers.get(CH.sessionsActive)!({})).toBe('active-session');
+    expect(sessionsTouch).toHaveBeenCalledWith('candidate-session');
   });
 });
