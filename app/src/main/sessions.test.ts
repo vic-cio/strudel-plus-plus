@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSessionStore } from './sessions';
+import { LEGACY_MIGRATION_DIRECTORY, LEGACY_MIGRATION_MARKER, LEGACY_MIGRATION_MARKER_CONTENT } from './sessionsRoot';
 
 const APPROVED_STARTER_BEAT = `// a new beat
 
@@ -35,6 +36,18 @@ describe('createSessionStore', () => {
     await writeFile(join(root, 'AGENTS.md'), '');
     const sessions = await createSessionStore(root).list();
     expect(sessions.map((session) => session.name)).toEqual(['live-set']);
+  });
+
+  it('keeps a user session named like the migration archive discoverable', async () => {
+    await mkdir(join(root, 'live-set'));
+    await mkdir(join(root, LEGACY_MIGRATION_DIRECTORY));
+    await mkdir(join(root, `${LEGACY_MIGRATION_DIRECTORY} (2)`));
+    await writeFile(
+      join(root, `${LEGACY_MIGRATION_DIRECTORY} (2)`, LEGACY_MIGRATION_MARKER),
+      LEGACY_MIGRATION_MARKER_CONTENT,
+    );
+    const sessions = await createSessionStore(root).list();
+    expect(sessions.map((session) => session.name)).toEqual(['legacy-migration', 'live-set']);
   });
 
   it('counts the beats in each session', async () => {

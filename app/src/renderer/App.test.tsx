@@ -10,7 +10,7 @@ import { App } from './App';
  * follow the EDIT buffer at the moment it moves, because a harness reads that
  * pointer from .session.json and edits exactly what it names.
  */
-const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(() => {
+const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } = vi.hoisted(() => {
   type WrittenState = { beat?: string | null; cpsByBeat?: Record<string, number>; dock?: unknown };
   const setStateMock = vi.fn(async (_session: string, _state: WrittenState) => {});
   // The watcher handler is captured so tests can play harness: write to disk,
@@ -31,6 +31,7 @@ const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(()
     toggle: vi.fn(),
     evaluate: vi.fn(),
     reevaluate: vi.fn(),
+    getCode: vi.fn((): string | undefined => undefined),
     containerRef: { current: null },
     cps: 0.5,
     changeCps: vi.fn(),
@@ -98,7 +99,7 @@ const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(()
       onExit: vi.fn(() => () => {}),
     },
   };
-  return { desktop, setStateMock, changeHandler, repl, codeChange };
+  return { desktop, setStateMock, changeHandler, repl, codeChange, sessionState };
 });
 
 vi.mock('./desktop', () => ({ desktop }));
@@ -149,21 +150,21 @@ afterEach(() => {
 beforeEach(() => {
   setStateMock.mockClear();
   desktop.sessions.list.mockResolvedValue([{ name: 'we cook', beats: 2, usedAt: 1 }]);
-  desktop.sessions.remove.mockClear();
+  desktop.sessions.open.mockClear();
   desktop.beats.listInfo.mockResolvedValue([
     { name: '808ing.js', modifiedAt: 1 },
     { name: 'we begin.js', modifiedAt: 2 },
   ]);
-  desktop.sessions.state.mockResolvedValue({ beat: 'we begin.js' });
+  sessionState.mockResolvedValue({ beat: 'we begin.js' });
   desktop.beats.read.mockClear();
   desktop.beats.read.mockImplementation(async (name: string) => `// ${name}`);
-  desktop.beats.list.mockResolvedValue([]);
-  desktop.beats.create.mockClear();
   desktop.beats.remove.mockClear();
   changeHandler.current = undefined;
   codeChange.current = undefined;
   repl.state = { started: false, error: undefined };
   repl.clearError.mockClear();
+  repl.getCode.mockReset();
+  repl.getCode.mockReturnValue(undefined);
   repl.setCode.mockClear();
   repl.reevaluate.mockClear();
 });
@@ -180,6 +181,14 @@ async function openSessionFromPicker(user: ReturnType<typeof userEvent.setup>): 
   await screen.findByText('we cook');
   await user.click(screen.getByText('we cook'));
   await waitFor(() => expect(screen.getAllByText('we begin').length).toBeGreaterThan(0));
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
 
 describe('App harness pane under pattern errors', () => {
@@ -263,7 +272,7 @@ describe('App session state', () => {
   it('heals a stale persisted pointer on open by adopting a real beat', async () => {
     // The session was left pointing at a beat that no longer exists — exactly
     // the state a harness reads and edits the wrong file from.
-    desktop.sessions.state.mockResolvedValue({ beat: 'deleted-beat.js' });
+    sessionState.mockResolvedValue({ beat: 'deleted-beat.js' });
     const user = userEvent.setup();
     render(<App />);
     await openSessionFromPicker(user);
@@ -272,14 +281,23 @@ describe('App session state', () => {
     await waitFor(() => expect(persistedBeats().at(-1)).toBe('808ing.js'));
   });
 
-  it('commits a session from the atomic open payload', async () => {
-    desktop.beats.read.mockRejectedValue(new Error('mutable store read raced'));
+  it('opens the session and reports only the beat that failed to load', async () => {
+    desktop.sessions.list.mockResolvedValue([
+      { name: 'we cook', beats: 2, usedAt: 2 },
+      { name: 'other session', beats: 2, usedAt: 1 },
+    ]);
     const user = userEvent.setup();
     render(<App />);
     await openSessionFromPicker(user);
 
-    expect(screen.getByTitle('Switch session').textContent).toContain('we cook');
-    expect(persistedBeats().at(-1)).toBe('we begin.js');
+    await user.click(screen.getByTitle('Switch session'));
+    desktop.beats.read.mockRejectedValueOnce(new Error('beat load failed'));
+    await user.click(screen.getByText('other session'));
+
+    expect(await screen.findByText(/Could not load 808ing\.js/)).toBeTruthy();
+    expect(desktop.sessions.open).toHaveBeenLastCalledWith('other session');
+    expect(screen.getByTitle('Switch session').textContent).toContain('other session');
+    expect(screen.getByRole('button', { name: 'we begin.js' })).toBeTruthy();
   });
 
   it('still persists tempo and sort state next to the beat pointer', async () => {
@@ -295,6 +313,16 @@ describe('App session state', () => {
     });
   });
 
+  it('commits a session from the atomic open payload', async () => {
+    desktop.beats.read.mockRejectedValue(new Error('mutable store read raced'));
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    expect(screen.getByTitle('Switch session').textContent).toContain('we cook');
+    expect(persistedBeats().at(-1)).toBe('we begin.js');
+  });
+
   it('clones the focused beat from the titlebar action', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -307,7 +335,7 @@ describe('App session state', () => {
     await waitFor(() => expect(desktop.beats.create).toHaveBeenCalledWith('we begin-2.js', '// we begin.js'));
   });
 
-  it('clones a non-focused row from disk until draft-map support lands', async () => {
+  it('clones a non-focused row from disk', async () => {
     const user = userEvent.setup();
     render(<App />);
     await openSessionFromPicker(user);
@@ -491,6 +519,9 @@ describe('App session state', () => {
       await released;
       listedBeats = [{ name: 'we begin.js', modifiedAt: 2 }];
     });
+    render(<App />);
+    await openSessionFromPicker(user);
+
     let readStarted!: () => void;
     let releaseRead!: () => void;
     const readBegan = new Promise<void>((resolve) => {
@@ -506,8 +537,6 @@ describe('App session state', () => {
       }
       return `// ${name}`;
     });
-    render(<App />);
-    await openSessionFromPicker(user);
 
     fireEvent.contextMenu(screen.getByRole('button', { name: '808ing.js' }));
     await user.click(screen.getByRole('menuitem', { name: 'delete' }));
@@ -519,6 +548,268 @@ describe('App session state', () => {
     releaseRead();
 
     await waitFor(() => expect(persistedBeats().at(-1)).toBe('we begin.js'));
+  });
+});
+
+describe('App beat drafts', () => {
+  async function editCurrentBeat(content: string): Promise<void> {
+    await act(async () => {
+      codeChange.current?.(content);
+    });
+  }
+
+  it('keeps an unsaved draft and its dirty dot when switching beats', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+
+    const first = screen.getByRole('button', { name: 'we begin.js' });
+    await waitFor(() => expect(first.getAttribute('data-dirty')).toBe('true'));
+
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    await waitFor(() => expect(persistedBeats().at(-1)).toBe('808ing.js'));
+    expect(first.getAttribute('data-dirty')).toBe('true');
+    expect(screen.getByRole('button', { name: '808ing.js' }).getAttribute('data-dirty')).toBeNull();
+
+    await user.click(first);
+    await waitFor(() => expect(repl.setCode).toHaveBeenLastCalledWith('// draft for we begin'));
+  });
+
+  it('Cmd+S writes only the focused draft and clears only that dirty state', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    await editCurrentBeat('// draft for 808ing');
+    desktop.beats.write.mockClear();
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+
+    await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('808ing.js', '// draft for 808ing'));
+    expect(screen.getByRole('button', { name: '808ing.js' }).getAttribute('data-dirty')).toBeNull();
+    expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true');
+  });
+
+  it('Cmd+S captures the current editor value before writing', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    repl.getCode.mockReturnValue('// latest editor code');
+    desktop.beats.write.mockClear();
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+
+    await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// latest editor code'));
+  });
+
+  it('Cmd+S clears an older polled draft when saving newer editor content', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// older polled draft');
+    repl.getCode.mockReturnValue('// latest editor code');
+    desktop.beats.write.mockClear();
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+
+    await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// latest editor code'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBeNull(),
+    );
+  });
+
+  it('preserves a newer edit made while a save is in flight', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    let editorContent = '// draft A';
+    repl.getCode.mockImplementation(() => editorContent);
+    await editCurrentBeat(editorContent);
+    const write = deferred<void>();
+    desktop.beats.write.mockImplementationOnce(() => write.promise);
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+    await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// draft A'));
+
+    editorContent = '// draft B';
+    await editCurrentBeat(editorContent);
+    await act(async () => {
+      write.resolve();
+      await write.promise;
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
+    );
+  });
+
+  it('keeps the latest beat selected when disk reads resolve out of order', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    repl.setCode.mockClear();
+    const beatB = deferred<string>();
+    const beatC = deferred<string>();
+    desktop.beats.read.mockImplementation((name: string) => {
+      if (name === '808ing.js') {
+        return beatB.promise;
+      }
+      if (name === 'we begin.js') {
+        return beatC.promise;
+      }
+      return Promise.resolve(`// ${name}`);
+    });
+
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    await user.click(screen.getByRole('button', { name: 'we begin.js' }));
+    await act(async () => {
+      beatC.resolve('// latest beat');
+      await beatC.promise;
+    });
+    await act(async () => {
+      beatB.resolve('// stale beat');
+      await beatB.promise;
+    });
+
+    expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('aria-current')).toBe('true');
+    expect(repl.setCode).toHaveBeenLastCalledWith('// latest beat');
+  });
+
+  it('warns on close when an inactive beat still has a dirty draft', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
+    );
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('captures an unpolled edit before the close guard checks drafts', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    repl.getCode.mockReturnValue('// unpolled editor code');
+
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('captures the editor before switching sessions', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    repl.getCode.mockReturnValue('// unpolled before session switch');
+
+    await user.click(screen.getByTitle('Switch session'));
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('keeps a dirty inactive draft when its disk file is unlinked', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+
+    await waitFor(() => expect(changeHandler.current).toBeDefined());
+    await changeHandler.current!({ name: 'we begin.js', event: 'unlink' });
+
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('keeps the newest watcher conflict when reads resolve out of order', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+
+    const staleRead = deferred<string>();
+    const latestRead = deferred<string>();
+    let watcherReads = 0;
+    desktop.beats.read.mockImplementation((name: string) => {
+      if (name !== 'we begin.js') {
+        return Promise.resolve(`// ${name}`);
+      }
+      watcherReads += 1;
+      return watcherReads === 1 ? staleRead.promise : latestRead.promise;
+    });
+    const first = changeHandler.current!({ name: 'we begin.js', event: 'change' });
+    const second = changeHandler.current!({ name: 'we begin.js', event: 'change' });
+    await waitFor(() => expect(watcherReads).toBe(2));
+
+    await act(async () => {
+      latestRead.resolve('// disk D');
+      await second;
+    });
+    await act(async () => {
+      staleRead.resolve('// disk C');
+      await first;
+    });
+
+    desktop.beats.read.mockResolvedValue('// disk D');
+    await user.click(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('button', { name: 'take theirs' }));
+
+    expect(repl.setCode).toHaveBeenLastCalledWith('// disk D');
+  });
+
+  it('preserves a dirty draft when an app rename emits its unlink first', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft for we begin');
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'rename' }));
+    const input = await screen.findByDisplayValue('we begin');
+    desktop.beats.listInfo.mockResolvedValue([
+      { name: 'day one.js', modifiedAt: 2 },
+      { name: '808ing.js', modifiedAt: 1 },
+    ]);
+    desktop.beats.rename.mockImplementationOnce(async () => {
+      await changeHandler.current?.({ name: 'we begin.js', event: 'unlink' });
+    });
+
+    await user.clear(input);
+    await user.type(input, 'day one{Enter}');
+
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('starts with no drafts after the renderer is restarted', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editCurrentBeat('// draft discarded on restart');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
+    );
+
+    cleanup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBeNull();
   });
 });
 
@@ -543,7 +834,7 @@ describe('App plugin dock', () => {
   });
 
   it('restores the split dock the session was left in', async () => {
-    desktop.sessions.state.mockResolvedValue({
+    sessionState.mockResolvedValue({
       beat: 'we begin.js',
       dock: { split: true, panes: [{ tabs: ['eq'], active: 'eq' }, { tabs: [] }] },
     });
@@ -557,7 +848,7 @@ describe('App plugin dock', () => {
   });
 
   it('forgets dock tabs for plugins that no longer exist', async () => {
-    desktop.sessions.state.mockResolvedValue({
+    sessionState.mockResolvedValue({
       beat: 'we begin.js',
       dock: { split: false, panes: [{ tabs: ['ghost'] }] },
     });
@@ -611,7 +902,8 @@ describe('App harness-edit hardening', () => {
     expect(await screen.findByText('editor exploded')).toBeTruthy();
     // The disk content was still adopted into the buffer before the editor
     // threw: the next attempt works from the new content, not the old.
-    expect(screen.getByRole('button', { name: 'we begin.js' })).toBeTruthy();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    expect(screen.getByRole('menuitem', { name: 'rename' })).toBeTruthy();
   });
 
   it('clears a stale REPL parse error when a harness write lands while stopped', async () => {
