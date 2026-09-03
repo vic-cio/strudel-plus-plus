@@ -188,6 +188,29 @@ button:disabled {
   border: none;
   color: var(--ink-soft);
 }
+.picker-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid transparent;
+}
+.picker-row:hover {
+  background: var(--ground-raised);
+}
+.picker-row .picker-item {
+  flex: 1;
+  min-width: 0;
+}
+.picker-delete {
+  flex: none;
+  width: 28px;
+  padding: 1px 4px;
+  color: var(--ink-faint);
+}
+.picker-delete:hover:not(:disabled) {
+  color: var(--rust);
+  border-color: var(--line-strong);
+  background: var(--ground-raised);
+}
 .picker-item[aria-current='true'] {
   background: var(--ground-raised);
   color: var(--ink);

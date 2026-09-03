@@ -1,11 +1,27 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FileTree } from './FileTree';
+import { FileTree, type FileTreeDraft, type FileTreeDraftAction } from './FileTree';
 import { moveBeat } from '../../shared/beatSorting';
 
 afterEach(cleanup);
+
+function draftFor(action: FileTreeDraftAction): FileTreeDraft {
+  switch (action.kind) {
+    case 'create':
+      return { kind: 'create', value: '' };
+    case 'rename':
+      return { kind: 'rename', from: action.from, value: action.from.replace(/\.js$/, '') };
+    case 'confirm-delete':
+      return action;
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
+  }
+}
 
 function setup(overrides: Partial<Parameters<typeof FileTree>[0]> = {}) {
   const props = {
@@ -18,6 +34,10 @@ function setup(overrides: Partial<Parameters<typeof FileTree>[0]> = {}) {
     onRename: vi.fn(),
     onRemove: vi.fn(),
     onClone: vi.fn(),
+    draft: undefined,
+    onBeginDraft: vi.fn(),
+    onChangeDraft: vi.fn(),
+    onCancelDraft: vi.fn(),
     onDismissError: vi.fn(),
     sortMode: 'chronological' as const,
     manualOrder: [],
@@ -25,7 +45,28 @@ function setup(overrides: Partial<Parameters<typeof FileTree>[0]> = {}) {
     onReorder: vi.fn(),
     ...overrides,
   };
-  render(<FileTree {...props} />);
+  function ControlledFileTree() {
+    const [draft, setDraft] = useState<FileTreeDraft | undefined>(props.draft);
+    return (
+      <FileTree
+        {...props}
+        draft={draft}
+        onBeginDraft={(action) => {
+          props.onBeginDraft(action);
+          setDraft(draftFor(action));
+        }}
+        onChangeDraft={(next) => {
+          props.onChangeDraft(next);
+          setDraft(next);
+        }}
+        onCancelDraft={() => {
+          props.onCancelDraft();
+          setDraft(undefined);
+        }}
+      />
+    );
+  }
+  render(<ControlledFileTree />);
   return { props, user: userEvent.setup() };
 }
 
@@ -114,21 +155,6 @@ describe('FileTree', () => {
     await user.click(screen.getByRole('menuitem', { name: 'clone' }));
 
     expect(props.onClone).toHaveBeenCalledWith('other.js');
-  });
-
-  it('supports the approved beat shortcuts', async () => {
-    const { user } = setup();
-
-    fireEvent.keyDown(window, { key: 'n', metaKey: true });
-    expect(screen.getByPlaceholderText('name')).toBeDefined();
-
-    await user.keyboard('{Escape}');
-    fireEvent.keyDown(window, { key: 'F2' });
-    expect(screen.getByPlaceholderText('name')).toHaveProperty('value', 'canary');
-
-    await user.keyboard('{Escape}');
-    fireEvent.keyDown(window, { key: 'Backspace', metaKey: true });
-    expect(screen.getByText('delete canary?')).toBeDefined();
   });
 
   it('dismisses the context menu on Escape and outside pointer input', async () => {

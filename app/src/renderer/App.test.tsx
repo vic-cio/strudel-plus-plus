@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { App } from './App';
@@ -10,7 +10,7 @@ import { App } from './App';
  * follow the EDIT buffer at the moment it moves, because a harness reads that
  * pointer from .session.json and edits exactly what it names.
  */
-const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
+const { desktop, setStateMock, changeHandler, repl, codeChange } = vi.hoisted(() => {
   type WrittenState = { beat?: string | null; cpsByBeat?: Record<string, number>; dock?: unknown };
   const setStateMock = vi.fn(async (_session: string, _state: WrittenState) => {});
   // The watcher handler is captured so tests can play harness: write to disk,
@@ -36,6 +36,7 @@ const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
     changeCps: vi.fn(),
     releaseCps: vi.fn(),
   };
+  const codeChange: { current: ((code: string) => void) | undefined } = { current: undefined };
   type MockSessionState = {
     beat?: string | null;
     dock?: { split?: boolean; panes?: { tabs?: string[]; active?: string }[] };
@@ -64,6 +65,7 @@ const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
       list: vi.fn(async () => [{ name: 'we cook', beats: 2, usedAt: 1 }]),
       active: vi.fn(async () => 'we cook'),
       create: vi.fn(openSessionResult),
+      remove: vi.fn(async () => {}),
       open: vi.fn(openSessionResult),
       state: sessionState,
       setState: setStateMock,
@@ -96,13 +98,16 @@ const { desktop, setStateMock, changeHandler, repl } = vi.hoisted(() => {
       onExit: vi.fn(() => () => {}),
     },
   };
-  return { desktop, setStateMock, changeHandler, repl };
+  return { desktop, setStateMock, changeHandler, repl, codeChange };
 });
 
 vi.mock('./desktop', () => ({ desktop }));
 
 vi.mock('./useStrudel', () => ({
-  useStrudel: () => repl,
+  useStrudel: (onCodeChange: (code: string) => void) => {
+    codeChange.current = onCodeChange;
+    return repl;
+  },
 }));
 
 vi.mock('./liveSnapshot', () => ({
@@ -144,6 +149,7 @@ afterEach(() => {
 beforeEach(() => {
   setStateMock.mockClear();
   desktop.sessions.list.mockResolvedValue([{ name: 'we cook', beats: 2, usedAt: 1 }]);
+  desktop.sessions.remove.mockClear();
   desktop.beats.listInfo.mockResolvedValue([
     { name: '808ing.js', modifiedAt: 1 },
     { name: 'we begin.js', modifiedAt: 2 },
@@ -155,6 +161,7 @@ beforeEach(() => {
   desktop.beats.create.mockClear();
   desktop.beats.remove.mockClear();
   changeHandler.current = undefined;
+  codeChange.current = undefined;
   repl.state = { started: false, error: undefined };
   repl.clearError.mockClear();
   repl.setCode.mockClear();
@@ -313,6 +320,61 @@ describe('App session state', () => {
 
     await waitFor(() => expect(desktop.beats.create).toHaveBeenCalledWith('808ing-2.js', '// 808ing.js'));
     expect(desktop.beats.read).toHaveBeenCalledWith('808ing.js');
+  });
+
+  it('clones the focused row with its current unsaved buffer from the context menu', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await act(async () => {
+      codeChange.current?.('// focused unsaved buffer');
+    });
+    desktop.beats.list.mockResolvedValue(['we begin.js', '808ing.js']);
+    desktop.beats.create.mockClear();
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'we begin.js' }));
+    await user.click(screen.getByRole('menuitem', { name: 'clone' }));
+
+    await waitFor(() =>
+      expect(desktop.beats.create).toHaveBeenCalledWith('we begin-2.js', '// focused unsaved buffer'),
+    );
+  });
+
+  it('keeps the beat shortcuts working when the sidebar is collapsed', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    await user.click(screen.getByTitle('Hide beats'));
+    fireEvent.keyDown(window, { key: 'F2' });
+    expect(await screen.findByDisplayValue('we begin')).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await user.click(screen.getByTitle('Hide beats'));
+    fireEvent.keyDown(window, { key: 'Backspace', metaKey: true });
+    expect(await screen.findByText('delete we begin?')).toBeTruthy();
+  });
+
+  it('does not run beat shortcuts while the session picker is open', async () => {
+    render(<App />);
+    fireEvent.keyDown(window, { key: 'n', metaKey: true });
+
+    expect(screen.queryByPlaceholderText('name')).toBeNull();
+    expect(screen.queryByPlaceholderText('session name')).toBeNull();
+  });
+
+  it('deletes the default session from the session picker', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('we cook');
+    desktop.sessions.list.mockResolvedValueOnce([]);
+
+    await user.click(screen.getByRole('button', { name: 'Delete session we cook' }));
+
+    await waitFor(() => expect(desktop.sessions.remove).toHaveBeenCalledWith('we cook'));
+    expect(confirm).toHaveBeenCalledWith('Delete session "we cook"?');
+    confirm.mockRestore();
   });
 
   it('finishes a clone before switching the session', async () => {

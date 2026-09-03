@@ -7,7 +7,14 @@ import {
   type BeatSummary,
 } from '../../shared/beatSorting';
 
-type Draft = { kind: 'create' } | { kind: 'rename'; from: string } | { kind: 'confirm-delete'; name: string };
+export type FileTreeDraftAction =
+  | { kind: 'create' }
+  | { kind: 'rename'; from: string }
+  | { kind: 'confirm-delete'; name: string };
+export type FileTreeDraft =
+  | { kind: 'create'; value: string }
+  | { kind: 'rename'; from: string; value: string }
+  | { kind: 'confirm-delete'; name: string };
 type BeatInput = BeatSummary | string;
 type Menu = { name: string; left: number; top: number };
 type MenuAction = 'clone' | 'rename' | 'delete' | 'create';
@@ -28,6 +35,10 @@ type Props = {
   onRename: (from: string, to: string) => void;
   onRemove: (name: string) => void;
   onClone: (name: string) => void;
+  draft: FileTreeDraft | undefined;
+  onBeginDraft: (draft: FileTreeDraftAction) => void;
+  onChangeDraft: (draft: FileTreeDraft) => void;
+  onCancelDraft: () => void;
   onSortChange: (mode: BeatSortMode) => void;
   onReorder: (from: string, to: string, position?: 'before' | 'after') => void;
   onDismissError: () => void;
@@ -53,12 +64,14 @@ export function FileTree({
   onRename,
   onRemove,
   onClone,
+  draft,
+  onBeginDraft,
+  onChangeDraft,
+  onCancelDraft,
   onSortChange,
   onReorder,
   onDismissError,
 }: Props) {
-  const [draft, setDraft] = useState<Draft>();
-  const [value, setValue] = useState('');
   const [menu, setMenu] = useState<Menu>();
   const input = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -70,16 +83,15 @@ export function FileTree({
   useEffect(() => {
     input.current?.focus();
     input.current?.select();
-  }, [draft]);
+  }, [draft?.kind, draft?.kind === 'rename' ? draft.from : undefined]);
 
   const begin = useCallback(
-    (next: Draft) => {
+    (next: FileTreeDraftAction) => {
       setMenu(undefined);
       onDismissError();
-      setDraft(next);
-      setValue(next.kind === 'rename' ? next.from.replace(/\.js$/, '') : '');
+      onBeginDraft(next);
     },
-    [onDismissError],
+    [onBeginDraft, onDismissError],
   );
 
   const openMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, name: string) => {
@@ -167,32 +179,15 @@ export function FileTree({
     }
   }, [menu]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (draft || event.defaultPrevented || event.isComposing) {
-        return;
-      }
-      if (event.metaKey && event.key.toLowerCase() === 'n') {
-        event.preventDefault();
-        begin({ kind: 'create' });
-      } else if (event.key === 'F2' && open) {
-        event.preventDefault();
-        begin({ kind: 'rename', from: open });
-      } else if (event.metaKey && event.key === 'Backspace' && open) {
-        event.preventDefault();
-        begin({ kind: 'confirm-delete', name: open });
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [begin, draft, open]);
-
   function commit() {
     if (!draft) {
       return;
     }
-    const name = value.trim();
-    setDraft(undefined);
+    if (draft.kind === 'confirm-delete') {
+      return;
+    }
+    const name = draft.value.trim();
+    onCancelDraft();
     if (!name) {
       return;
     }
@@ -207,15 +202,19 @@ export function FileTree({
     <input
       ref={input}
       className="tree-input"
-      value={value}
+      value={draft && draft.kind !== 'confirm-delete' ? draft.value : ''}
       placeholder="name"
-      onChange={(event) => setValue(event.target.value)}
+      onChange={(event) => {
+        if (draft && draft.kind !== 'confirm-delete') {
+          onChangeDraft({ ...draft, value: event.target.value });
+        }
+      }}
       onBlur={commit}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
           commit();
         } else if (event.key === 'Escape') {
-          setDraft(undefined);
+          onCancelDraft();
         }
       }}
     />
@@ -322,13 +321,13 @@ export function FileTree({
                   <button
                     onClick={() => {
                       const deletedName = draft.name;
-                      setDraft(undefined);
+                      onCancelDraft();
                       onRemove(deletedName);
                     }}
                   >
                     delete
                   </button>
-                  <button onClick={() => setDraft(undefined)}>keep</button>
+                  <button onClick={onCancelDraft}>keep</button>
                 </p>
               )}
             </div>

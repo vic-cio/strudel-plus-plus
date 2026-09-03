@@ -8,6 +8,7 @@ type Props = {
   error: string | undefined;
   onOpen: (name: string) => void;
   onCreate: (name: string) => void;
+  onRemove: (name: string) => void;
   onCancel: (() => void) | undefined;
 };
 
@@ -32,7 +33,7 @@ function when(usedAt: number): string {
  * The most recent session is selected on arrival and enter takes it, so the
  * common case is one keypress between launching and playing.
  */
-export function SessionPicker({ sessions, root, error, onOpen, onCreate, onCancel }: Props) {
+export function SessionPicker({ sessions, root, error, onOpen, onCreate, onRemove, onCancel }: Props) {
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
   const [selected, setSelected] = useState(0);
@@ -78,18 +79,32 @@ export function SessionPicker({ sessions, root, error, onOpen, onCreate, onCance
         <div className="picker-list">
           {sessions.length === 0 && !naming && <p className="tree-empty">no sessions yet, start one below</p>}
           {sessions.map((session, index) => (
-            <button
-              key={session.name}
-              className="picker-item"
-              aria-current={index === selected}
-              onMouseEnter={() => setSelected(index)}
-              onClick={() => onOpen(session.name)}
-            >
-              <span className="picker-name">{session.name}</span>
-              <span className="picker-meta">
-                {session.beats} {session.beats === 1 ? 'beat' : 'beats'} · {when(session.usedAt)}
-              </span>
-            </button>
+            <div key={session.name} className="picker-row">
+              <button
+                className="picker-item"
+                aria-current={index === selected}
+                onMouseEnter={() => setSelected(index)}
+                onClick={() => onOpen(session.name)}
+              >
+                <span className="picker-name">{session.name}</span>
+                <span className="picker-meta">
+                  {session.beats} {session.beats === 1 ? 'beat' : 'beats'} · {when(session.usedAt)}
+                </span>
+              </button>
+              <button
+                className="picker-delete"
+                aria-label={`Delete session ${session.name}`}
+                title={`Delete ${session.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (window.confirm(`Delete session "${session.name}"?`)) {
+                    onRemove(session.name);
+                  }
+                }}
+              >
+                ×
+              </button>
+            </div>
           ))}
         </div>
 

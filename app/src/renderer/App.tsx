@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ConflictBar } from './components/ConflictBar';
-import { FileTree } from './components/FileTree';
+import { FileTree, type FileTreeDraft, type FileTreeDraftAction } from './components/FileTree';
 import { Grip } from './components/Grip';
 import { HarnessPane } from './components/HarnessPane';
 import { PluginDock } from './components/PluginDock';
@@ -71,6 +71,7 @@ export function App() {
   const [session, setSession] = useState<string>();
   const [picking, setPicking] = useState(true);
   const [buffer, setBuffer] = useState('');
+  const [treeDraft, setTreeDraft] = useState<FileTreeDraft>();
   const [treeWidth, setTreeWidth] = usePaneWidth('pane.tree', 210);
   const [termWidth, setTermWidth] = usePaneWidth('pane.term', 460);
   const [treeOpen, setTreeOpen] = usePaneWidth('pane.treeOpen', 1);
@@ -94,7 +95,39 @@ export function App() {
   const beatsRef = useRef<BeatSummary[]>([]);
   const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
   const manualBeatOrderRef = useRef<string[]>([]);
+  const treeDraftRef = useRef<FileTreeDraft | undefined>(undefined);
+  const pickingRef = useRef(picking);
   openRef.current = open;
+  pickingRef.current = picking;
+  treeDraftRef.current = treeDraft;
+
+  const updateTreeDraft = useCallback((next: FileTreeDraft | undefined) => {
+    treeDraftRef.current = next;
+    setTreeDraft(next);
+  }, []);
+
+  const beginTreeDraft = useCallback(
+    (next: FileTreeDraftAction) => {
+      setTreeOpen(1);
+      setBeatError(undefined);
+      switch (next.kind) {
+        case 'create':
+          updateTreeDraft({ kind: 'create', value: '' });
+          return;
+        case 'rename':
+          updateTreeDraft({ kind: 'rename', from: next.from, value: next.from.replace(/\.js$/, '') });
+          return;
+        case 'confirm-delete':
+          updateTreeDraft(next);
+          return;
+        default: {
+          const _exhaustive: never = next;
+          return _exhaustive;
+        }
+      }
+    },
+    [setTreeOpen, updateTreeDraft],
+  );
 
   const onCodeChange = useCallback((code: string) => {
     bufferRef.current = code;
@@ -243,6 +276,7 @@ export function App() {
           setDock(restoredDock);
           setSession(name);
           sessionRef.current = name;
+          updateTreeDraft(undefined);
           setPicking(false);
           if (beat && content !== undefined) {
             adopt(beat, content);
@@ -257,7 +291,7 @@ export function App() {
           void desktop.sessions.list().then(setSessions, () => undefined);
         }),
       ),
-    [adopt, applyBeatList, attempt, persistBeat, queueSessionOperation],
+    [adopt, applyBeatList, attempt, persistBeat, queueSessionOperation, updateTreeDraft],
   );
 
   // Remember tempo, sort, and the plugin dock with the session, so reopening
@@ -452,6 +486,16 @@ export function App() {
     void save();
   }, [save]);
 
+  const removeSession = useCallback(
+    (name: string) => {
+      void attempt(async () => {
+        await desktop.sessions.remove(name);
+        setSessions(await desktop.sessions.list());
+      });
+    },
+    [attempt],
+  );
+
   const create = useCallback(
     (raw: string) =>
       queueSessionOperation(() =>
@@ -534,7 +578,45 @@ export function App() {
   }, [state.started, cps, buffer, open]);
 
   useEffect(() => {
+    // FileTree is unmounted when the sidebar is collapsed. Its naming/delete
+    // draft therefore belongs in App, and stale targets must be retired when
+    // the current beat list changes.
+    const current = treeDraftRef.current;
+    if (
+      current &&
+      current.kind !== 'create' &&
+      !beats.some((beat) => beat.name === (current.kind === 'rename' ? current.from : current.name))
+    ) {
+      updateTreeDraft(undefined);
+    }
+  }, [beats, updateTreeDraft]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (pickingRef.current || event.defaultPrevented || event.isComposing) {
+        return;
+      }
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      if (treeDraftRef.current) {
+        return;
+      }
+      if (event.metaKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        beginTreeDraft({ kind: 'create' });
+        return;
+      }
+      if (event.key === 'F2' && openRef.current) {
+        event.preventDefault();
+        beginTreeDraft({ kind: 'rename', from: openRef.current });
+        return;
+      }
+      if (event.metaKey && event.key === 'Backspace' && openRef.current) {
+        event.preventDefault();
+        beginTreeDraft({ kind: 'confirm-delete', name: openRef.current });
+        return;
+      }
       if (event.metaKey && event.key === 's') {
         event.preventDefault();
         void save();
@@ -546,7 +628,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [save, toggle]);
+  }, [beginTreeDraft, save, toggle]);
 
   // The dock clamp follows the Electron window as it is resized.
   useEffect(() => {
@@ -577,6 +659,7 @@ export function App() {
         error={beatError}
         onOpen={(name) => void openSession(name)}
         onCreate={(name) => void openSession(name, true)}
+        onRemove={removeSession}
         onCancel={session ? () => setPicking(false) : undefined}
       />
     );
@@ -648,6 +731,10 @@ export function App() {
             onRename={(from, to) => void rename(from, to)}
             onRemove={(name) => void remove(name)}
             onClone={(name) => void cloneBeat(name)}
+            draft={treeDraft}
+            onBeginDraft={beginTreeDraft}
+            onChangeDraft={updateTreeDraft}
+            onCancelDraft={() => updateTreeDraft(undefined)}
             sortMode={beatSort}
             manualOrder={manualBeatOrder}
             onSortChange={changeSort}
