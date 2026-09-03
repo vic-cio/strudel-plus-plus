@@ -357,7 +357,9 @@ describe('App beat drafts', () => {
     fireEvent.keyDown(window, { key: 's', metaKey: true });
 
     await waitFor(() => expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// latest editor code'));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBeNull(),
+    );
   });
 
   it('preserves a newer edit made while a save is in flight', async () => {
@@ -380,7 +382,9 @@ describe('App beat drafts', () => {
       await write.promise;
     });
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
+    );
   });
 
   it('keeps the latest beat selected when disk reads resolve out of order', async () => {
