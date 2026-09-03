@@ -68,9 +68,7 @@ describe('seedDefaultSession', () => {
     await writeFile(join(root, DEFAULT_SESSION_NAME, 'we begin.js'), '// legacy');
     const store = createSessionStore(root);
 
-    await expect(store.list()).resolves.toEqual([
-      expect.objectContaining({ name: DEFAULT_SESSION_NAME, beats: 1 }),
-    ]);
+    await expect(store.list()).resolves.toEqual([expect.objectContaining({ name: DEFAULT_SESSION_NAME, beats: 1 })]);
     await store.remove(DEFAULT_SESSION_NAME);
 
     await expect(store.list()).resolves.toEqual([]);

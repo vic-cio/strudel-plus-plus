@@ -514,7 +514,9 @@ export function App() {
       queueSessionOperation(() =>
         attempt(async () => {
           const file = normalizeBeatName(raw);
-          const currentOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
+          const currentOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map(
+            (beat) => beat.name,
+          );
           await desktop.beats.rename(from, file);
           const renamedOrder = currentOrder.map((name) => (name === from ? file : name));
           manualBeatOrderRef.current = renamedOrder;

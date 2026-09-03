@@ -254,9 +254,8 @@ async function main() {
     const nextStore = createBeatStore(folder);
     const nextState = await sessions.getState(name);
     const nextBeats = await nextStore.listInfo();
-    const nextBeat = nextState.beat && nextBeats.some((beat) => beat.name === nextState.beat)
-      ? nextState.beat
-      : nextBeats[0]?.name;
+    const nextBeat =
+      nextState.beat && nextBeats.some((beat) => beat.name === nextState.beat) ? nextState.beat : nextBeats[0]?.name;
     const nextContent = nextBeat ? await nextStore.read(nextBeat) : undefined;
     const previousBeatsRoot = config.beatsRoot;
     const previousActive = active;

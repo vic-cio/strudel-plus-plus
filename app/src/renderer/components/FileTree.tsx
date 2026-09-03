@@ -170,10 +170,7 @@ export function FileTree({
     if (!height) {
       return;
     }
-    const top = Math.min(
-      menu.top,
-      Math.max(VIEWPORT_GUTTER, window.innerHeight - height - VIEWPORT_GUTTER),
-    );
+    const top = Math.min(menu.top, Math.max(VIEWPORT_GUTTER, window.innerHeight - height - VIEWPORT_GUTTER));
     if (top !== menu.top) {
       setMenu({ ...menu, top });
     }

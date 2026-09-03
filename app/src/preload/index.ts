@@ -18,7 +18,8 @@ const api = {
     remove: (name: string): Promise<void> => ipcRenderer.invoke(CH.sessionsRemove, name),
     open: (name: string): Promise<SessionOpenResult> => ipcRenderer.invoke(CH.sessionsOpen, name),
     state: (name: string): Promise<SessionState> => ipcRenderer.invoke(CH.sessionsState, name),
-    setState: (name: string, state: SessionState): Promise<void> => ipcRenderer.invoke(CH.sessionsSetState, name, state),
+    setState: (name: string, state: SessionState): Promise<void> =>
+      ipcRenderer.invoke(CH.sessionsSetState, name, state),
   },
   beats: {
     root: (): Promise<string> => ipcRenderer.invoke(CH.beatsRoot),
