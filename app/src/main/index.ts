@@ -296,7 +296,7 @@ async function main() {
       if (harnessRestarted && previousHarness) {
         lastHarness = previousHarness;
         try {
-          session = restartHarness();
+          restartHarness();
         } catch {
           session = undefined;
         }

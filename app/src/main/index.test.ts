@@ -6,7 +6,7 @@ const listeners = new Map<string, (...args: any[]) => unknown>();
 
 const ptyStart = vi.fn();
 const ptyKill = vi.fn();
-const beatStoreListInfo = vi.fn(async () => []);
+const beatStoreListInfo = vi.fn(async (): Promise<{ name: string; modifiedAt: number }[]> => []);
 const beatStoreRead = vi.fn();
 
 const beatStoreFactory = vi.fn(() => ({
