@@ -58,6 +58,7 @@ describe('renderer beat draft state', () => {
     expect(dirtyBeats(state, 'session')).toEqual(new Set(['one.js']));
     expect(hasDirtyDrafts(state)).toBe(true);
     expect(getDraftSession(state, 'session').conflicts['one.js']).toBe('disk C');
+    expect(activateBeat(state, 'session', 'one.js', 'disk C').content).toBe('disk A');
   });
 
   it('keeps dirty state across session boundaries and reports any dirty session', () => {

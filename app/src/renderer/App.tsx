@@ -290,10 +290,10 @@ export function App() {
           mainSessionOpened = true;
           const saved = await desktop.sessions.state(name);
           const list = await desktop.beats.listInfo();
-          // Resolve everything the open needs — including the restored beat's
-          // content — before touching any state. A failure up to here leaves
-          // the previous session exactly as it was, with the picker showing
-          // what went wrong.
+          // Read beats independently. A harness can delete or temporarily
+          // lock one file between listInfo and read; that beat should not make
+          // the whole session unopenable. Successful reads still reconcile
+          // their baselines, while failed reads remain visible as an error.
           const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
           const restoredManualOrder = saved.manualBeatOrder ?? [];
           const restoredCps = saved.cpsByBeat ?? {};
@@ -301,10 +301,17 @@ export function App() {
             saved.dock,
             listPlugins().map((plugin) => plugin.id),
           );
-          const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
-          const contents = await Promise.all(
+          const preferredBeat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : undefined;
+          const reads = await Promise.allSettled(
             list.map(async (item) => ({ name: item.name, content: await desktop.beats.read(item.name) })),
           );
+          const contents = reads.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+          const failedReads = reads.flatMap((result, index) =>
+            result.status === 'rejected' ? [{ name: list[index]?.name ?? 'unknown beat', reason: result.reason }] : [],
+          );
+          const beat =
+            (preferredBeat && contents.some((item) => item.name === preferredBeat) ? preferredBeat : undefined) ??
+            contents[0]?.name;
           const contentByBeat = new Map(contents.map((item) => [item.name, item.content]));
           const content = beat ? contentByBeat.get(beat) : undefined;
 
@@ -358,6 +365,12 @@ export function App() {
           setPicking(false);
           if (latestSessions) {
             setSessions(latestSessions);
+          }
+
+          if (failedReads.length > 0) {
+            setBeatError(
+              `Could not load ${failedReads.map(({ name }) => name).join(', ')}. The rest of the session is available.`,
+            );
           }
 
           if (beat && content !== undefined) {

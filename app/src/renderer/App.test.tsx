@@ -260,7 +260,7 @@ describe('App session state', () => {
     await waitFor(() => expect(persistedBeats().at(-1)).toBe('808ing.js'));
   });
 
-  it('keeps the previous session visible when loading the new session fails', async () => {
+  it('opens the session and reports only the beat that failed to load', async () => {
     desktop.sessions.list.mockResolvedValue([
       { name: 'we cook', beats: 2, usedAt: 2 },
       { name: 'other session', beats: 2, usedAt: 1 },
@@ -273,11 +273,9 @@ describe('App session state', () => {
     desktop.beats.read.mockRejectedValueOnce(new Error('beat load failed'));
     await user.click(screen.getByText('other session'));
 
-    expect(await screen.findByText('beat load failed')).toBeTruthy();
-    expect(desktop.sessions.open).toHaveBeenLastCalledWith('we cook');
-    await user.click(screen.getByRole('button', { name: 'cancel' }));
-
-    expect(screen.getByTitle('Switch session').textContent).toContain('we cook');
+    expect(await screen.findByText(/Could not load 808ing\.js/)).toBeTruthy();
+    expect(desktop.sessions.open).toHaveBeenLastCalledWith('other session');
+    expect(screen.getByTitle('Switch session').textContent).toContain('other session');
     expect(screen.getByRole('button', { name: 'we begin.js' })).toBeTruthy();
   });
 

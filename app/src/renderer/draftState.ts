@@ -18,7 +18,6 @@ export type DraftState = Readonly<Record<string, DraftSessionState>>;
 export type BeatActivation = {
   readonly state: DraftState;
   readonly content: string;
-  readonly conflict: string | undefined;
 };
 
 const EMPTY_SESSION: DraftSessionState = {
@@ -89,8 +88,14 @@ export function seedBeat(state: DraftState, session: string, beat: string, diskC
 /** Record editor content. Matching the baseline removes the dirty entry. */
 export function recordDraft(state: DraftState, session: string, beat: string, content: string): DraftState {
   return updateSession(state, session, (current) => {
+    // A conflict makes the saved value an intentionally stale baseline. Keep
+    // an explicit draft even when the editor happens to return to that text;
+    // otherwise activation falls back to the newer disk value and loses the
+    // user's local side while the conflict is unresolved.
     const drafts =
-      current.saved[beat] === content ? removeKey(current.drafts, beat) : setKey(current.drafts, beat, content);
+      current.saved[beat] === content && current.conflicts[beat] === undefined
+        ? removeKey(current.drafts, beat)
+        : setKey(current.drafts, beat, content);
     return drafts === current.drafts ? current : { ...current, drafts };
   });
 }
@@ -103,12 +108,12 @@ export function activateBeat(state: DraftState, session: string, beat: string, d
   const content = draft ?? diskContent;
 
   if (hasDraft) {
-    return { state, content, conflict: current.conflicts[beat] };
+    return { state, content };
   }
 
   const next = seedBeat(state, session, beat, diskContent);
   const nextSession = sessionFor(next, session);
-  return { state: next, content, conflict: nextSession.conflicts[beat] };
+  return { state: next, content };
 }
 
 /** Mark an explicit save complete for exactly one beat. */
