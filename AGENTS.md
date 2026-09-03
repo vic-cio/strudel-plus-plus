@@ -43,6 +43,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 ## Default example session
 
 - A brand-new sessions root (no session folder yet) is seeded with one example session, `we cook`, the moment anything calls `list()` — see `seedDefaultSession` in `app/src/main/sessions.ts`, alongside `seedHarnessContent`. It never touches a root that already has a session. The snapshot's files live under `app/default-session/` and are pulled in at build time via Vite `?raw`/JSON imports in `app/src/main/defaultSession.ts`, the same inlining approach `harnessContent.ts` uses for its defaults — no extra packaging step needed. `defaultSession.ts` strips the snapshot's `usedAt`; seeding always stamps its own via `nextUsedAt`.
+- The canonical default root and legacy-root migration live in `app/src/main/sessionsRoot.ts`; the migration is independently exercised by `sessionsRoot.test.ts`.
 
 ## Beat watcher ignore rule
 
