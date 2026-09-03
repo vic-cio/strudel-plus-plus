@@ -11,7 +11,7 @@ function setup(overrides: Partial<Parameters<typeof FileTree>[0]> = {}) {
   const props = {
     beats: ['canary.js'],
     open: 'canary.js',
-    dirty: false,
+    dirtyByBeat: {},
     error: undefined,
     onOpen: vi.fn(),
     onCreate: vi.fn(),

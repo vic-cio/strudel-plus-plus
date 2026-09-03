@@ -8,6 +8,20 @@ import { SessionPicker, type SessionSummary } from './components/SessionPicker';
 import { StatusBar } from './components/StatusBar';
 import { TempoBox } from './components/TempoBox';
 import { desktop } from './desktop';
+import {
+  acceptDisk,
+  activateBeat as restoreBeat,
+  hasDirtyDrafts,
+  isBeatDirty,
+  markConflict,
+  observeDisk,
+  recordDraft,
+  removeBeat,
+  renameBeat,
+  saveBeat,
+  seedBeat,
+  type DraftState,
+} from './draftState';
 import { listPlugins } from './plugins';
 import { APP_BUILT, readAudio, writeSnapshot } from './liveSnapshot';
 import { onRendererError } from './reportErrors';
@@ -66,7 +80,6 @@ export function App() {
   const [open, setOpen] = useState<string>();
   const [harnesses, setHarnesses] = useState<HarnessDef[]>([]);
   const [harness, setHarness] = useState('shell');
-  const [conflict, setConflict] = useState<string>();
   const [beatError, setBeatError] = useState<string>();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [session, setSession] = useState<string>();
@@ -81,31 +94,48 @@ export function App() {
   const [dockHeight, setDockHeight] = usePaneWidth('pane.dock', DOCK_DEFAULT);
   const [windowHeight, setWindowHeight] = useState(() => window.innerHeight);
   const [cpsByBeat, setCpsByBeat] = useState<Record<string, number>>({});
+  const [draftState, setDraftState] = useState<DraftState>({});
   // Plugin dock layout: which devices are open, how the dock is split, and
   // each device's own faders. Session-scoped like the tempo map — switching
   // beats must not close the mixer.
   const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
 
-  // The last content this app wrote to disk. Everything the sync rule decides
-  // hangs off it, so it is a ref: it must be current inside the watcher
-  // callback, not one render behind.
-  const savedRef = useRef('');
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
+  const draftStateRef = useRef<DraftState>({});
+  const pendingRenameRef = useRef<{ from: string; to: string } | undefined>(undefined);
+  const beatActivationRef = useRef(0);
+  const diskChangeVersionRef = useRef(new Map<string, number>());
   const beatsRef = useRef<BeatSummary[]>([]);
   const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
   const manualBeatOrderRef = useRef<string[]>([]);
+  const sessionRef = useRef<string>(undefined);
   openRef.current = open;
+  sessionRef.current = session;
 
-  const onCodeChange = useCallback((code: string) => {
-    bufferRef.current = code;
-    setBuffer(code);
+  const updateDraftState = useCallback((next: DraftState) => {
+    if (next === draftStateRef.current) {
+      return;
+    }
+    draftStateRef.current = next;
+    setDraftState(next);
   }, []);
 
-  const { containerRef, state, setCode, clearError, toggle, cps, changeCps, releaseCps, reevaluate } =
+  const onCodeChange = useCallback(
+    (code: string) => {
+      bufferRef.current = code;
+      setBuffer(code);
+      const sessionName = sessionRef.current;
+      const beatName = openRef.current;
+      if (sessionName && beatName) {
+        updateDraftState(recordDraft(draftStateRef.current, sessionName, beatName, code));
+      }
+    },
+    [updateDraftState],
+  );
+
+  const { containerRef, state, setCode, getCode, clearError, toggle, cps, changeCps, releaseCps, reevaluate } =
     useStrudel(onCodeChange);
-  const sessionRef = useRef<string>(undefined);
-  sessionRef.current = session;
 
   /**
    * The EDIT buffer's beat changed — record it now, at the event.
@@ -129,7 +159,12 @@ export function App() {
   cpsRef.current = cps;
   const cpsByBeatRef = useRef(cpsByBeat);
   cpsByBeatRef.current = cpsByBeat;
-  const dirty = Boolean(open) && buffer !== savedRef.current;
+  const dirtyByBeat: Record<string, boolean> = {};
+  for (const beat of beats) {
+    dirtyByBeat[beat.name] = session !== undefined && isBeatDirty(draftState, session, beat.name);
+  }
+  const dirty = Boolean(session && open && isBeatDirty(draftState, session, open));
+  const conflict = session && open ? draftState[session]?.conflicts[open] : undefined;
   const codedTempo = hasCodedTempo(buffer);
 
   const applyBeatTempo = useCallback(
@@ -149,14 +184,14 @@ export function App() {
     [changeCps, releaseCps],
   );
 
-  const adopt = useCallback(
+  const showBeat = useCallback(
     (name: string, content: string) => {
-      savedRef.current = content;
+      beatActivationRef.current += 1;
       bufferRef.current = content;
       setBuffer(content);
+      openRef.current = name;
       setOpen(name);
       setCode(content);
-      setConflict(undefined);
       // The previous beat's parse failure says nothing about this one. A
       // stale "[mini] parse error" that survives an adopt reads as if the
       // new beat is broken too.
@@ -165,6 +200,33 @@ export function App() {
       persistBeat(name);
     },
     [applyBeatTempo, clearError, persistBeat, setCode],
+  );
+
+  /** Activate a beat without losing its renderer-only draft. */
+  const activate = useCallback(
+    (name: string, diskContent: string) => {
+      const sessionName = sessionRef.current;
+      if (!sessionName) {
+        return;
+      }
+      const result = restoreBeat(draftStateRef.current, sessionName, name, diskContent);
+      updateDraftState(result.state);
+      showBeat(name, result.content);
+    },
+    [showBeat, updateDraftState],
+  );
+
+  /** Explicitly adopt content, discarding only this beat's draft. */
+  const adopt = useCallback(
+    (name: string, content: string) => {
+      const sessionName = sessionRef.current;
+      if (!sessionName) {
+        return;
+      }
+      updateDraftState(acceptDisk(draftStateRef.current, sessionName, name, content));
+      showBeat(name, content);
+    },
+    [showBeat, updateDraftState],
   );
 
   /** Report what went wrong instead of dropping it on the floor. */
@@ -201,62 +263,138 @@ export function App() {
     })();
   }, []);
 
+  /** Capture the last editor value before an action moves focus elsewhere. */
+  const captureCurrentDraft = useCallback((): string | undefined => {
+    const sessionName = sessionRef.current;
+    const beatName = openRef.current;
+    if (!sessionName || !beatName) {
+      return undefined;
+    }
+    const content = getCode() ?? bufferRef.current;
+    bufferRef.current = content;
+    setBuffer(content);
+    updateDraftState(recordDraft(draftStateRef.current, sessionName, beatName, content));
+    return content;
+  }, [getCode, updateDraftState]);
+
   /** Open a session: point the app at its folder and restore where it was left. */
   const openSession = useCallback(
-    (name: string, make = false) =>
-      attempt(async () => {
-        await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
-        const saved = await desktop.sessions.state(name);
-        const list = await refresh();
-        // Resolve everything the open needs — including the restored beat's
-        // content — before touching any state. A failure up to here leaves
-        // the previous session exactly as it was, with the picker showing
-        // what went wrong.
-        const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
-        const restoredManualOrder = saved.manualBeatOrder ?? [];
-        const restoredCps = saved.cpsByBeat ?? {};
-        const restoredDock = normalizeDockState(
-          saved.dock,
-          listPlugins().map((plugin) => plugin.id),
-        );
-        const beat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : list[0]?.name;
-        const content = beat ? await desktop.beats.read(beat) : undefined;
-
-        // From here the open is synchronous: the app flips to the new session
-        // in one render with no await in between. The previous code set a
-        // hydration flag across awaits, and a failure in that window blocked
-        // session-state writes for the rest of the run — freezing the
-        // persisted beat on whatever an earlier open had written, which the
-        // harness then read and edited. No await, no window.
-        beatSortRef.current = restoredSort;
-        manualBeatOrderRef.current = restoredManualOrder;
-        cpsByBeatRef.current = restoredCps;
-        setBeatSort(restoredSort);
-        setManualBeatOrder(restoredManualOrder);
-        setCpsByBeat(restoredCps);
-        setDock(restoredDock);
-        setSession(name);
-        sessionRef.current = name;
-        setPicking(false);
-        // The picker's recency counts are cosmetic; a failure refreshing
-        // them must not undo the open.
+    (name: string, make = false) => {
+      beatActivationRef.current += 1;
+      captureCurrentDraft();
+      const previousSession = sessionRef.current;
+      let mainSessionOpened = false;
+      return attempt(async () => {
         try {
-          setSessions(await desktop.sessions.list());
-        } catch {
-          // Keep the list the picker already had.
-        }
+          await (make ? desktop.sessions.create(name) : desktop.sessions.open(name));
+          mainSessionOpened = true;
+          const saved = await desktop.sessions.state(name);
+          const list = await desktop.beats.listInfo();
+          // Read beats independently. A harness can delete or temporarily
+          // lock one file between listInfo and read; that beat should not make
+          // the whole session unopenable. Successful reads still reconcile
+          // their baselines, while failed reads remain visible as an error.
+          const restoredSort = saved.beatSort ?? DEFAULT_BEAT_SORT;
+          const restoredManualOrder = saved.manualBeatOrder ?? [];
+          const restoredCps = saved.cpsByBeat ?? {};
+          const restoredDock = normalizeDockState(
+            saved.dock,
+            listPlugins().map((plugin) => plugin.id),
+          );
+          const preferredBeat = saved.beat && list.some((item) => item.name === saved.beat) ? saved.beat : undefined;
+          const reads = await Promise.allSettled(
+            list.map(async (item) => ({ name: item.name, content: await desktop.beats.read(item.name) })),
+          );
+          const contents = reads.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+          const failedReads = reads.flatMap((result, index) =>
+            result.status === 'rejected' ? [{ name: list[index]?.name ?? 'unknown beat', reason: result.reason }] : [],
+          );
+          const beat =
+            (preferredBeat && contents.some((item) => item.name === preferredBeat) ? preferredBeat : undefined) ??
+            contents[0]?.name;
+          const contentByBeat = new Map(contents.map((item) => [item.name, item.content]));
+          const content = beat ? contentByBeat.get(beat) : undefined;
 
-        if (beat && content !== undefined) {
-          adopt(beat, content);
-        } else {
-          setOpen(undefined);
-          openRef.current = undefined;
-          // Nothing is open; say so, rather than leaving a beat name behind
-          // that no longer resolves to a file on disk.
-          persistBeat(null);
+          let latestSessions: SessionSummary[] | undefined;
+          try {
+            latestSessions = await desktop.sessions.list();
+          } catch {
+            // Keep the list the picker already had.
+          }
+
+          let nextDraftState = draftStateRef.current;
+          for (const item of contents) {
+            const current = nextDraftState[name];
+            const savedContent = current?.saved[item.name];
+            const draftContent = current?.drafts[item.name];
+            if (savedContent === undefined) {
+              nextDraftState = seedBeat(nextDraftState, name, item.name, item.content);
+              continue;
+            }
+            const decision = resolveDiskChange({
+              diskContent: item.content,
+              bufferContent: draftContent ?? savedContent,
+              lastSavedContent: savedContent,
+            });
+            if (decision.kind === 'noop') {
+              nextDraftState = observeDisk(nextDraftState, name, item.name, item.content);
+            } else if (decision.kind === 'apply') {
+              nextDraftState = acceptDisk(nextDraftState, name, item.name, decision.content);
+            } else {
+              nextDraftState = markConflict(nextDraftState, name, item.name, decision.diskContent);
+            }
+          }
+
+          // From here the open is synchronous: the app flips to the new session
+          // in one render with no await in between. The previous code set a
+          // hydration flag across awaits, and a failure in that window blocked
+          // session-state writes for the rest of the run, freezing the
+          // persisted beat on whatever an earlier open had written.
+          beatsRef.current = list;
+          setBeats(list);
+          beatSortRef.current = restoredSort;
+          manualBeatOrderRef.current = restoredManualOrder;
+          cpsByBeatRef.current = restoredCps;
+          setBeatSort(restoredSort);
+          setManualBeatOrder(restoredManualOrder);
+          setCpsByBeat(restoredCps);
+          setDock(restoredDock);
+          setSession(name);
+          sessionRef.current = name;
+          updateDraftState(nextDraftState);
+          setPicking(false);
+          if (latestSessions) {
+            setSessions(latestSessions);
+          }
+
+          if (failedReads.length > 0) {
+            setBeatError(
+              `Could not load ${failedReads.map(({ name }) => name).join(', ')}. The rest of the session is available.`,
+            );
+          }
+
+          if (beat && content !== undefined) {
+            activate(beat, content);
+          } else {
+            setOpen(undefined);
+            openRef.current = undefined;
+            bufferRef.current = '';
+            setBuffer('');
+            setCode('');
+            clearError();
+            // Nothing is open; say so, rather than leaving a beat name behind
+            // that no longer resolves to a file on disk.
+            persistBeat(null);
+          }
+        } catch (error) {
+          if (mainSessionOpened && previousSession !== undefined) {
+            await desktop.sessions.open(previousSession);
+          }
+          throw error;
         }
-      }),
-    [adopt, attempt, persistBeat, refresh],
+      });
+    },
+    [activate, attempt, captureCurrentDraft, clearError, persistBeat, refresh, setCode, updateDraftState],
   );
 
   // Remember tempo, sort, and the plugin dock with the session, so reopening
@@ -322,45 +460,67 @@ export function App() {
 
   const openBeat = useCallback(
     async (name: string) => {
-      adopt(name, await desktop.beats.read(name));
+      const activation = beatActivationRef.current + 1;
+      beatActivationRef.current = activation;
+      captureCurrentDraft();
+      const content = await desktop.beats.read(name);
+      if (activation !== beatActivationRef.current) {
+        return;
+      }
+      activate(name, content);
       // Re-evaluating swaps the pattern in place. The scheduler keeps counting,
       // so the new beat lands on the next cycle boundary and the bar holds.
       reevaluate();
     },
-    [adopt, reevaluate],
+    [activate, captureCurrentDraft, reevaluate],
   );
 
   /** Clone the open beat and move to the copy, without interrupting the sound. */
-  const cloneBeat = useCallback(
-    () =>
-      attempt(async () => {
-        if (!openRef.current) {
-          return;
-        }
-        const content = bufferRef.current;
-        const name = nextCloneName(openRef.current, await desktop.beats.list());
-        await desktop.beats.create(name, content);
-        await refresh();
-        // The code is unchanged. When audio is already active, reevaluation
-        // hands the scheduler over to the clone without restarting the sound.
-        handoffClonedBeat({
-          playing: state.started,
-          activate: () => adopt(name, content),
-          reevaluate,
-        });
-      }),
-    [adopt, attempt, reevaluate, refresh, state.started],
-  );
+  const cloneBeat = useCallback(() => {
+    captureCurrentDraft();
+    return attempt(async () => {
+      if (!openRef.current) {
+        return;
+      }
+      const content = bufferRef.current;
+      const name = nextCloneName(openRef.current, await desktop.beats.list());
+      await desktop.beats.create(name, content);
+      await refresh();
+      // The code is unchanged. When audio is already active, reevaluation
+      // hands the scheduler over to the clone without restarting the sound.
+      handoffClonedBeat({
+        playing: state.started,
+        activate: () => adopt(name, content),
+        reevaluate,
+      });
+    });
+  }, [adopt, attempt, captureCurrentDraft, reevaluate, refresh, state.started]);
 
   const save = useCallback(async () => {
-    if (!openRef.current) {
+    const sessionName = sessionRef.current;
+    const beatName = openRef.current;
+    if (!sessionName || !beatName) {
       return;
     }
-    const content = bufferRef.current;
-    await desktop.beats.write(openRef.current, content);
-    savedRef.current = content;
+    const content = captureCurrentDraft();
+    if (content === undefined) {
+      return;
+    }
+    await desktop.beats.write(beatName, content);
+    if (sessionRef.current !== sessionName || openRef.current !== beatName) {
+      updateDraftState(saveBeat(draftStateRef.current, sessionName, beatName, content));
+      return;
+    }
+    const latestContent = getCode() ?? bufferRef.current;
+    if (latestContent !== content) {
+      bufferRef.current = latestContent;
+      setBuffer(latestContent);
+      updateDraftState(recordDraft(draftStateRef.current, sessionName, beatName, latestContent));
+      return;
+    }
+    updateDraftState(saveBeat(draftStateRef.current, sessionName, beatName, content));
     setBuffer(content);
-  }, []);
+  }, [captureCurrentDraft, updateDraftState]);
 
   // Global renderer failures (an effect that threw, an IPC that rejected) are
   // already logged to the main process; surfacing them here keeps a failure a
@@ -375,22 +535,71 @@ export function App() {
   // terminal happens to be watching — instead of landing in the error surface.
   const applyDiskChange = useCallback(
     async (change: BeatChange) => {
+      const version = (diskChangeVersionRef.current.get(change.name) ?? 0) + 1;
+      diskChangeVersionRef.current.set(change.name, version);
+      const isCurrent = () => diskChangeVersionRef.current.get(change.name) === version;
       void refresh();
-      if (change.name !== openRef.current || change.event === 'unlink') {
+      const sessionName = sessionRef.current;
+      if (!sessionName) {
         return;
       }
-      const diskContent = await desktop.beats.read(change.name);
+
+      if (change.event === 'unlink') {
+        if (pendingRenameRef.current?.from === change.name) {
+          return;
+        }
+        if (isBeatDirty(draftStateRef.current, sessionName, change.name)) {
+          return;
+        }
+        updateDraftState(removeBeat(draftStateRef.current, sessionName, change.name));
+        if (change.name === openRef.current) {
+          openRef.current = undefined;
+          setOpen(undefined);
+          bufferRef.current = '';
+          setBuffer('');
+          setCode('');
+          clearError();
+          persistBeat(null);
+        }
+        return;
+      }
+
+      if (change.name === openRef.current) {
+        captureCurrentDraft();
+      }
+      let diskContent: string;
+      try {
+        diskContent = await desktop.beats.read(change.name);
+      } catch (error) {
+        if (!isCurrent()) {
+          return;
+        }
+        throw error;
+      }
+      if (!isCurrent()) {
+        return;
+      }
+      const current = draftStateRef.current[sessionName];
+      const savedContent = current?.saved[change.name];
+      const draftContent = current?.drafts[change.name];
+      if (savedContent === undefined) {
+        updateDraftState(seedBeat(draftStateRef.current, sessionName, change.name, diskContent));
+        return;
+      }
       const decision = resolveDiskChange({
         diskContent,
-        bufferContent: bufferRef.current,
-        lastSavedContent: savedRef.current,
+        bufferContent: draftContent ?? savedContent,
+        lastSavedContent: savedContent,
       });
       if (decision.kind === 'noop') {
-        savedRef.current = diskContent;
+        updateDraftState(observeDisk(draftStateRef.current, sessionName, change.name, diskContent));
         return;
       }
       if (decision.kind === 'apply') {
-        savedRef.current = decision.content;
+        updateDraftState(acceptDisk(draftStateRef.current, sessionName, change.name, decision.content));
+        if (change.name !== openRef.current) {
+          return;
+        }
         bufferRef.current = decision.content;
         setBuffer(decision.content);
         // A pattern that fails to parse must surface in the status bar (the
@@ -408,9 +617,9 @@ export function App() {
         }
         return;
       }
-      setConflict(decision.diskContent);
+      updateDraftState(markConflict(draftStateRef.current, sessionName, change.name, decision.diskContent));
     },
-    [clearError, reevaluate, refresh, setCode],
+    [captureCurrentDraft, clearError, persistBeat, reevaluate, refresh, setCode, updateDraftState],
   );
 
   useEffect(() => {
@@ -432,53 +641,80 @@ export function App() {
   }, [adopt, conflict, reevaluate]);
 
   const keepMine = useCallback(() => {
-    setConflict(undefined);
     void save();
   }, [save]);
 
   const create = useCallback(
-    (raw: string) =>
-      attempt(async () => {
+    (raw: string) => {
+      captureCurrentDraft();
+      return attempt(async () => {
         const file = normalizeBeatName(raw);
         await desktop.beats.create(file, STARTER);
         await refresh();
         adopt(file, STARTER);
-      }),
-    [adopt, attempt, refresh],
+      });
+    },
+    [adopt, attempt, captureCurrentDraft, refresh],
   );
 
   const rename = useCallback(
-    (from: string, raw: string) =>
-      attempt(async () => {
+    (from: string, raw: string) => {
+      beatActivationRef.current += 1;
+      captureCurrentDraft();
+      return attempt(async () => {
         const file = normalizeBeatName(raw);
         const currentOrder = sortBeats(beatsRef.current, 'manual', manualBeatOrderRef.current).map((beat) => beat.name);
-        await desktop.beats.rename(from, file);
-        const renamedOrder = currentOrder.map((name) => (name === from ? file : name));
-        manualBeatOrderRef.current = renamedOrder;
-        setManualBeatOrder(renamedOrder);
-        await refresh();
-        setOpen(file);
-        openRef.current = file;
-        persistBeat(file);
-      }),
-    [attempt, persistBeat, refresh],
+        const pendingRename = { from, to: file };
+        pendingRenameRef.current = pendingRename;
+        try {
+          await desktop.beats.rename(from, file);
+          const sessionName = sessionRef.current;
+          if (sessionName) {
+            updateDraftState(renameBeat(draftStateRef.current, sessionName, from, file));
+          }
+          const renamedOrder = currentOrder.map((name) => (name === from ? file : name));
+          manualBeatOrderRef.current = renamedOrder;
+          setManualBeatOrder(renamedOrder);
+          await refresh();
+          setOpen(file);
+          openRef.current = file;
+          persistBeat(file);
+        } finally {
+          if (pendingRenameRef.current === pendingRename) {
+            pendingRenameRef.current = undefined;
+          }
+        }
+      });
+    },
+    [attempt, captureCurrentDraft, persistBeat, refresh, updateDraftState],
   );
 
   const remove = useCallback(
-    (name: string) =>
-      attempt(async () => {
+    (name: string) => {
+      beatActivationRef.current += 1;
+      captureCurrentDraft();
+      return attempt(async () => {
         await desktop.beats.remove(name);
+        const sessionName = sessionRef.current;
+        if (sessionName) {
+          updateDraftState(removeBeat(draftStateRef.current, sessionName, name));
+        }
         const list = await refresh();
         const next = list[0]?.name;
         if (next) {
-          adopt(next, await desktop.beats.read(next));
+          activate(next, await desktop.beats.read(next));
         } else {
           setOpen(undefined);
           openRef.current = undefined;
+          bufferRef.current = '';
+          setBuffer('');
+          setCode('');
+          clearError();
           persistBeat(null);
         }
-      }),
-    [adopt, attempt, persistBeat, refresh],
+      });
+    },
+    [activate, attempt, captureCurrentDraft, clearError, persistBeat, refresh, setCode, updateDraftState],
   );
 
   // The snapshot is how a harness sees the live buffer and the meters. The
@@ -490,7 +726,7 @@ export function App() {
       writeSnapshot({
         appBuilt: APP_BUILT,
         beat: openRef.current,
-        unsavedEdits: bufferRef.current !== savedRef.current,
+        unsavedEdits: dirty,
         playing: state.started,
         cps,
         updated: new Date().toISOString(),
@@ -500,7 +736,33 @@ export function App() {
     publish();
     const timer = window.setInterval(publish, state.started ? 500 : 2000);
     return () => window.clearInterval(timer);
-  }, [state.started, cps, buffer, open]);
+  }, [state.started, cps, buffer, draftState, dirty, open]);
+
+  // Electron runs beforeunload when a BrowserWindow is closed. Returning a
+  // warning here keeps all renderer-only drafts alive until the user chooses
+  // whether to stay; restarting the app creates a fresh, empty DraftState.
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      captureCurrentDraft();
+      if (!hasDirtyDrafts(draftStateRef.current)) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = 'Unsaved beats will be lost.';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [captureCurrentDraft]);
+
+  const showSessionPicker = useCallback(() => {
+    captureCurrentDraft();
+    setPicking(true);
+  }, [captureCurrentDraft]);
+
+  const cancelSessionPicker = useCallback(() => {
+    setCode(bufferRef.current);
+    setPicking(false);
+  }, [setCode]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -546,7 +808,7 @@ export function App() {
         error={beatError}
         onOpen={(name) => void openSession(name)}
         onCreate={(name) => void openSession(name, true)}
-        onCancel={session ? () => setPicking(false) : undefined}
+        onCancel={session ? cancelSessionPicker : undefined}
       />
     );
   }
@@ -561,7 +823,7 @@ export function App() {
         >
           {treeOpen ? '[<]' : '[>]'}
         </button>
-        <button className="collapse" onClick={() => setPicking(true)} title="Switch session">
+        <button className="collapse" onClick={showSessionPicker} title="Switch session">
           {session ?? 'sessions'}
         </button>
         <span className="beat">
@@ -610,7 +872,7 @@ export function App() {
           <FileTree
             beats={beats}
             open={open}
-            dirty={dirty}
+            dirtyByBeat={dirtyByBeat}
             error={beatError}
             onOpen={(name) => void openBeat(name)}
             onCreate={(name) => void create(name)}

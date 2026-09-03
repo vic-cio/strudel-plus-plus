@@ -53,6 +53,7 @@ export type ReplState = {
 export function useStrudel(onCodeChange: (code: string) => void) {
   const pollRef = useRef<number>(undefined);
   const editorRef = useRef<StrudelMirror>(undefined);
+  const pendingCodeRef = useRef<string | undefined>(undefined);
   const [state, setState] = useState<ReplState>({ started: false });
   const [cps, setCps] = useState(0.5);
   // Set once he touches the tempo control, and re-applied after every
@@ -113,10 +114,14 @@ export function useStrudel(onCodeChange: (code: string) => void) {
       editor.reconfigureExtension('isTabIndentationEnabled', true);
       editor.setFontFamily(getComputedStyle(document.body).fontFamily);
       editorRef.current = editor;
+      if (pendingCodeRef.current !== undefined) {
+        editor.setCode(pendingCodeRef.current);
+        pendingCodeRef.current = undefined;
+      }
       // StrudelMirror mirrors every keystroke onto `.code`, but gives no callback
       // for it, so the buffer is polled. 120ms is below the threshold where the
       // dirty marker feels laggy and far above the cost of a string compare.
-      let last = '';
+      let last = editor.code ?? '';
       pollRef.current = window.setInterval(() => {
         const code = editor.code ?? '';
         if (code !== last) {
@@ -137,8 +142,16 @@ export function useStrudel(onCodeChange: (code: string) => void) {
   useEffect(() => destroyEditor, [destroyEditor]);
 
   const setCode = useCallback((code: string) => {
-    editorRef.current?.setCode(code);
+    const editor = editorRef.current;
+    if (editor) {
+      editor.setCode(code);
+      return;
+    }
+    pendingCodeRef.current = code;
   }, []);
+
+  /** Read the editor synchronously when an action moves focus to another beat. */
+  const getCode = useCallback(() => editorRef.current?.code, []);
 
   /** Drop a stale REPL error. The editor only clears its error on the next
    * evaluation, so adopting another beat while stopped would otherwise keep
@@ -212,6 +225,7 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     containerRef,
     state,
     setCode,
+    getCode,
     clearError,
     toggle,
     evaluate,

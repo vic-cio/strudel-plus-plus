@@ -23,6 +23,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 ## Session state and the live-beat pointer
 
 - `.session.json` is the contract harnesses read to find the live beat: its `beat` field must mirror what the EDIT buffer shows at all times. The renderer persists it at the events that move the buffer (`persistBeat` in `app/src/renderer/App.tsx`, called from adopt/rename/remove/openSession), not in a render effect — render-scheduled writes can be skipped or run with a stale beat. `SessionState.beat` is `string | null`; an explicit null records that nothing is open.
+- Renderer-only draft state lives in `app/src/renderer/draftState.ts`: each session has `drafts`, `saved`, and `conflicts` maps keyed by beat name. Beat switching restores `drafts`; only explicit save updates `saved`; the maps are intentionally absent from `.session.json` and `.strudel-live.json`, and the close guard uses `hasDirtyDrafts` across all sessions.
 - Keep `openSession`'s post-fetch mutation block free of awaits: it was once guarded by a hydration flag across awaits, and a mid-open failure blocked all session-state writes for the rest of the run, freezing the pointer on a long-gone beat — the stale answer a spawned agent then edited.
 - The session store prunes `cpsByBeat` and `manualBeatOrder` entries whose beat file no longer exists, on load (`getState`) and write (`setState`) in `app/src/main/sessions.ts`. New per-beat state fields belong in that prune; tests pin all of this.
 
