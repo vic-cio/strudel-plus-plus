@@ -98,6 +98,34 @@ button:disabled {
   cursor: default;
 }
 
+.settings-popover {
+  position: fixed;
+  top: 38px;
+  right: 12px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 250px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--ground-sunk);
+  background-image: var(--hatch);
+}
+.settings-popover label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--ink-soft);
+}
+.settings-popover select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--ground-input);
+  border: 1px solid var(--line);
+  padding: 3px;
+}
+
 .tempo {
   display: inline-flex;
   align-items: center;

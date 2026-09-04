@@ -1,4 +1,4 @@
-import { installMasterTap, selectLiveTap } from './masterTap';
+import { installMasterTap, liveMasterStream, selectLiveTap } from './masterTap';
 
 /**
  * Patch before any audio node exists, which is why this is imported for its
@@ -25,8 +25,13 @@ export const masterTaps =
           analyser.smoothingTimeConstant = 0.5;
           return analyser;
         },
+        createMediaStreamDestination: (context) => (context as AudioContext).createMediaStreamDestination(),
       });
 
 export function masterAnalyser(): AnalyserNode | undefined {
   return selectLiveTap(masterTaps) as AnalyserNode | undefined;
+}
+
+export function masterMediaStream(): MediaStream | undefined {
+  return liveMasterStream(masterTaps);
 }

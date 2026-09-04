@@ -3,9 +3,11 @@ export type TapDeps = {
   isDestination: (target: unknown) => boolean;
   contextOf: (target: unknown) => object;
   createAnalyser: (context: object) => object;
+  createMediaStreamDestination?: (context: object) => { stream: MediaStream };
 };
 
 const patched = new WeakMap<object, Map<object, object>>();
+const streams = new WeakMap<Map<object, object>, Map<object, MediaStream>>();
 
 /**
  * Listen to everything that reaches the speakers.
@@ -23,6 +25,8 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
   }
 
   const taps = new Map<object, object>();
+  const contextStreams = new Map<object, MediaStream>();
+  streams.set(taps, contextStreams);
   const original = deps.proto.connect;
 
   deps.proto.connect = function (this: object, ...args: never[]) {
@@ -35,6 +39,11 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
         if (!tap) {
           tap = deps.createAnalyser(context);
           taps.set(context, tap);
+          if (deps.createMediaStreamDestination) {
+            const destination = deps.createMediaStreamDestination(context);
+            original.call(this, destination as never);
+            contextStreams.set(context, destination.stream);
+          }
         }
         original.call(this, tap as never);
       } catch {
@@ -46,6 +55,21 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
 
   patched.set(deps.proto, taps);
   return taps;
+}
+
+export function liveMasterStream(taps: Map<object, object>): MediaStream | undefined {
+  let fallback: MediaStream | undefined;
+  for (const [context, stream] of streams.get(taps) ?? []) {
+    if ((context as TapContext).state === 'closed') {
+      streams.get(taps)?.delete(context);
+      continue;
+    }
+    if ((context as TapContext).state === 'running') {
+      return stream;
+    }
+    fallback = stream;
+  }
+  return fallback;
 }
 
 type TapContext = { state?: string; resume?: () => Promise<void> };

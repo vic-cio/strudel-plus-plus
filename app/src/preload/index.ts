@@ -46,6 +46,10 @@ const api = {
     send: (messages: { port: string; message: number[]; offset: number }[]) => ipcRenderer.send(CH.midiSend, messages),
     ports: (): Promise<string[]> => ipcRenderer.invoke(CH.midiPorts),
   },
+  recording: {
+    save: (data: Uint8Array, suggestedName: string): Promise<string | undefined> =>
+      ipcRenderer.invoke(CH.recordingSave, data, suggestedName),
+  },
   harness: {
     list: (): Promise<HarnessDef[]> => ipcRenderer.invoke(CH.harnessList),
     start: (id: string, cols: number, rows: number): Promise<void> => ipcRenderer.invoke(CH.ptyStart, id, cols, rows),

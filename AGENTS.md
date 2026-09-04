@@ -50,6 +50,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 `watchBeats` skips dot-entries _relative to the watched root only_ (`ignored` in `app/src/main/watcher.ts`). Filtering on absolute path parts would silently deafen any sessions root under a dot-directory (e.g. worktrees like `.treehouse`), with no error anywhere. `watcher.test.ts` pins both sides of this rule.
 
+## Recording seam
+
+- Recording mode is a typed renderer preference (`app/src/shared/recording.ts`) stored in local storage; successful full-buffer evaluation is captured by `useStrudel`'s `afterEval` callback, while `app/src/renderer/recording.ts` captures the live master stream. Main-process export writes a temporary `.partial` file and renames it only after success (`app/src/main/recordingExport.ts`), so failed exports do not present incomplete artifacts.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
