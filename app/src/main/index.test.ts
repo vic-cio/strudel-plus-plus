@@ -42,6 +42,7 @@ vi.mock('electron', () => {
   return {
     app: {
       whenReady: vi.fn(async () => undefined),
+      getPath: vi.fn((name: string) => (name === 'userData' ? '/tmp/test-userData' : process.cwd())),
       getAppPath: vi.fn(() => process.cwd()),
       on: vi.fn(),
       quit: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock('electron', () => {
       on: vi.fn((channel: string, fn: (...args: any[]) => unknown) => listeners.set(channel, fn)),
     },
     shell: { openExternal: vi.fn() },
+    dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
   };
 });
 

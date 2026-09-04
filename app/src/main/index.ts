@@ -12,6 +12,8 @@ import { createSessionStore } from './sessions';
 import { resolveSessionsRoot } from './sessionsRoot';
 import { createPtyHost } from './pty';
 import { watchBeats } from './watcher';
+import { createSessionRootSetting } from './sessionRootPointer';
+import { createBundledLibrary } from './bundledLibrary';
 import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
@@ -86,8 +88,12 @@ process.on('unhandledRejection', (reason) => {
 async function main() {
   await app.whenReady();
 
-  const root = await resolveSessionsRoot();
-  const sessions = createSessionStore(root);
+  const rootSetting = createSessionRootSetting(app.getPath('userData'));
+  const configuredRoot = await rootSetting.load();
+  // The pointer names the folder; the app never moves what lives there.
+  let root = configuredRoot.state === 'ok' ? configuredRoot.path : await resolveSessionsRoot();
+  let sessions = createSessionStore(root);
+  const library = createBundledLibrary();
 
   // Everything below hangs off which session is open: the beat store is rooted
   // in it, the watcher follows it, and the harness runs inside it so the agent
@@ -306,6 +312,24 @@ async function main() {
   }
 
   ipcMain.handle(CH.sessionsRoot, () => root);
+  ipcMain.handle(CH.sessionsRootStatus, async () => await rootSetting.load());
+  // Re-rooting is only offered while no session is open, so the beat store,
+  // watcher and harness are not yet bound to a folder under the old root and
+  // the new root takes effect without a restart.
+  ipcMain.handle(CH.sessionsChooseRoot, async () => {
+    if (active) throw new Error('Close the current session before changing the sessions folder');
+    const result = await dialog.showOpenDialog(window, { properties: ['openDirectory', 'createDirectory'] });
+    if (result.canceled || result.filePaths[0] === undefined) return rootSetting.load();
+    await rootSetting.save(result.filePaths[0]);
+    const status = await rootSetting.load();
+    if (status.state === 'ok') {
+      root = status.path;
+      sessions = createSessionStore(root);
+      store = createBeatStore(root);
+      config.beatsRoot = root;
+    }
+    return status;
+  });
   ipcMain.handle(CH.sessionsList, () => sessions.list());
   ipcMain.handle(CH.sessionsActive, () => active);
   ipcMain.handle(CH.sessionsCreate, (_event, name: string) =>
@@ -325,6 +349,8 @@ async function main() {
   ipcMain.handle(CH.sessionsOpen, (_event, name: string) => queueSessionTransition(() => openSession(name)));
   ipcMain.handle(CH.sessionsState, (_event, name: string) => sessions.getState(name));
   ipcMain.handle(CH.sessionsSetState, (_event, name: string, state: SessionState) => sessions.setState(name, state));
+  ipcMain.handle(CH.libraryList, () => library.list());
+  ipcMain.handle(CH.libraryRead, (_event, name: string) => library.read(name));
 
   let server: Server | undefined;
   const devServer = process.env.ELECTRON_RENDERER_URL;

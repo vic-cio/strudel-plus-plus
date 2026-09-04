@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { CH, type BeatChange } from '../shared/ipc';
+import { CH, type BeatChange, type SessionRootStatus } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
 import type { BeatSummary } from '../shared/beatSorting';
 import type { SessionOpenResult, SessionState } from '../shared/session';
@@ -12,6 +12,8 @@ import type { SessionOpenResult, SessionState } from '../shared/session';
 const api = {
   sessions: {
     root: (): Promise<string> => ipcRenderer.invoke(CH.sessionsRoot),
+    rootStatus: (): Promise<SessionRootStatus> => ipcRenderer.invoke(CH.sessionsRootStatus),
+    chooseRoot: (): Promise<SessionRootStatus> => ipcRenderer.invoke(CH.sessionsChooseRoot),
     list: (): Promise<{ name: string; beats: number; usedAt: number }[]> => ipcRenderer.invoke(CH.sessionsList),
     active: (): Promise<string> => ipcRenderer.invoke(CH.sessionsActive),
     create: (name: string): Promise<SessionOpenResult> => ipcRenderer.invoke(CH.sessionsCreate, name),
@@ -37,6 +39,10 @@ const api = {
         ipcRenderer.off(CH.beatsChanged, listener);
       };
     },
+  },
+  library: {
+    list: (): Promise<{ name: string; session: string }[]> => ipcRenderer.invoke(CH.libraryList),
+    read: (name: string): Promise<string> => ipcRenderer.invoke(CH.libraryRead, name),
   },
   osc: {
     send: (message: { address: string; args: (string | number)[]; timestamp?: number }) =>
