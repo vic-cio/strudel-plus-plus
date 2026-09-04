@@ -7,7 +7,7 @@ export type TapDeps = {
 };
 
 const patched = new WeakMap<object, Map<object, object>>();
-const streams = new WeakMap<Map<object, object>, Map<object, MediaStream>>();
+const streams = new WeakMap<Map<object, object>, Map<object, { stream: MediaStream }>>();
 
 /**
  * Listen to everything that reaches the speakers.
@@ -25,7 +25,7 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
   }
 
   const taps = new Map<object, object>();
-  const contextStreams = new Map<object, MediaStream>();
+  const contextStreams = new Map<object, { stream: MediaStream }>();
   streams.set(taps, contextStreams);
   const original = deps.proto.connect;
 
@@ -40,12 +40,14 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
           tap = deps.createAnalyser(context);
           taps.set(context, tap);
           if (deps.createMediaStreamDestination) {
-            const destination = deps.createMediaStreamDestination(context);
-            original.call(this, destination as never);
-            contextStreams.set(context, destination.stream);
+            contextStreams.set(context, deps.createMediaStreamDestination(context));
           }
         }
         original.call(this, tap as never);
+        const recordingDestination = contextStreams.get(context);
+        if (recordingDestination) {
+          original.call(this, recordingDestination as never);
+        }
       } catch {
         // Never let a meter cost the audio.
       }
@@ -57,17 +59,22 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
   return taps;
 }
 
+/**
+ * Every engine that reaches the speakers is connected to the recording
+ * destination, not just the first one that created it, so a take carries the
+ * same mix the meters show.
+ */
 export function liveMasterStream(taps: Map<object, object>): MediaStream | undefined {
   let fallback: MediaStream | undefined;
-  for (const [context, stream] of streams.get(taps) ?? []) {
+  for (const [context, destination] of streams.get(taps) ?? []) {
     if ((context as TapContext).state === 'closed') {
       streams.get(taps)?.delete(context);
       continue;
     }
     if ((context as TapContext).state === 'running') {
-      return stream;
+      return destination.stream;
     }
-    fallback = stream;
+    fallback = destination.stream;
   }
   return fallback;
 }

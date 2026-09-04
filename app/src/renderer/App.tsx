@@ -36,8 +36,14 @@ import { clampCps, hasCodedTempo } from '../shared/tempo';
 import { normalizeDockState, type DockState } from '../shared/dockState';
 import type { BeatChange } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
-import { DEFAULT_RECORDING_SETTINGS, RECORDING_MODES, recordingSource, type RecordingMode } from '../shared/recording';
-import { recordingFailureMessage, startRecording, type RecordingCapture } from './recording';
+import {
+  DEFAULT_RECORDING_SETTINGS,
+  RECORDING_MODES,
+  recordingFailureMessage,
+  recordingSource,
+  type RecordingMode,
+} from '../shared/recording';
+import { startRecording, type RecordingCapture } from './recording';
 
 function isRecordingMode(value: string | null): value is RecordingMode {
   return RECORDING_MODES.some((item) => item.mode === value);
@@ -115,6 +121,7 @@ export function App() {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [savingTake, setSavingTake] = useState(false);
 
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
@@ -124,6 +131,7 @@ export function App() {
   const diskChangeVersionRef = useRef(new Map<string, number>());
   const lastSuccessfulBufferRef = useRef<string | undefined>(undefined);
   const recordingRef = useRef<RecordingCapture | undefined>(undefined);
+  const savingTakeRef = useRef(false);
   const beatsRef = useRef<BeatSummary[]>([]);
   const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
   const manualBeatOrderRef = useRef<string[]>([]);
@@ -200,20 +208,26 @@ export function App() {
   }, []);
 
   const record = useCallback(async () => {
-    if (recordingRef.current) {
+    if (savingTakeRef.current) {
+      return;
+    }
+    const capture = recordingRef.current;
+    if (capture) {
+      recordingRef.current = undefined;
+      savingTakeRef.current = true;
+      setSavingTake(true);
+      setRecording(false);
       try {
-        const blob = await recordingRef.current.stop();
-        recordingRef.current = undefined;
-        setRecording(false);
-        const extension = recordingMode === 'mp4' ? 'mp4' : 'webm';
+        const blob = await capture.stop();
         await desktop.recording.save(
           new Uint8Array(await blob.arrayBuffer()),
-          `${open?.replace(/\.js$/, '') ?? 'take'}.${extension}`,
+          `${open?.replace(/\.js$/, '') ?? 'take'}.${capture.extension}`,
         );
       } catch (error) {
-        recordingRef.current = undefined;
-        setRecording(false);
         setBeatError(recordingFailureMessage(error));
+      } finally {
+        savingTakeRef.current = false;
+        setSavingTake(false);
       }
       return;
     }
@@ -1056,7 +1070,11 @@ export function App() {
           </button>
         </span>
         <span className="transport right">
-          <button onClick={() => void record()} disabled={!open} title={recording ? 'Stop recording' : 'Record'}>
+          <button
+            onClick={() => void record()}
+            disabled={!open || savingTake}
+            title={recording ? 'Stop recording' : 'Record'}
+          >
             {recording ? '■ stop rec' : `● record [${recordingMode}]`}
           </button>
           <button className="collapse" onClick={() => setShowSettings((shown) => !shown)} title="Recording settings">
