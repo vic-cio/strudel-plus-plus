@@ -7,13 +7,13 @@ vi.mock('@strudel/webaudio', () => ({
 
 import { createGainAudioAdapter } from './gainAudio';
 
+// A real AudioParam's `value` getter is refreshed by the audio thread, so
+// setValueAtTime leaves it untouched on this turn of the main thread.
 function fakeParameter(initial = 1) {
   return {
     value: initial,
     cancelScheduledValues: vi.fn(),
-    setValueAtTime: vi.fn(function (this: { value: number }, value: number) {
-      this.value = value;
-    }),
+    setValueAtTime: vi.fn(),
   };
 }
 
@@ -28,7 +28,13 @@ describe('live gain audio adapter', () => {
     expect(adapter.set(0.42)).toEqual({ kind: 'applied', value: 0.42 });
     expect(parameter.cancelScheduledValues).toHaveBeenCalledWith(12.5);
     expect(parameter.setValueAtTime).toHaveBeenCalledWith(0.42, 12.5);
-    expect(adapter.read()).toEqual({ kind: 'applied', value: 0.42 });
+  });
+
+  it('reports the scheduled value rather than the stale AudioParam getter', () => {
+    const parameter = fakeParameter(1);
+    const adapter = createGainAudioAdapter({ resolveParameter: () => parameter, now: () => 0 });
+
+    expect(adapter.set(0.65)).toEqual({ kind: 'applied', value: 0.65 });
   });
 
   it('rejects invalid values without touching audio', () => {

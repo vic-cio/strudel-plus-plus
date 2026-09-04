@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { normalizeDockState, type DockPaneState, type DockState } from '../../shared/dockState';
 import { listPlugins } from '../plugins';
-import { pruneInactiveControls, type ControlContext, type ScopedControlValues } from '../plugins';
+import type { ControlContext } from '../plugins';
 import type { PluginDef } from '../plugins/registry';
 
 type Props = {
@@ -36,15 +36,7 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
     defs.map((def) => def.id),
   );
   const [menuPane, setMenuPane] = useState<number>();
-  // Unlike pluginState, this store is deliberately renderer-only. Session
-  // controls remain in dock.pluginState; beat/function controls disappear as
-  // soon as their owner changes and are never written to .session.json.
-  const [controlValues, setControlValues] = useState<ScopedControlValues>({});
   const rootRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    setControlValues((current) => pruneInactiveControls(current, scope));
-  }, [scope.beat, scope.functionName]);
 
   const openIds = new Set(state.panes.flatMap((pane) => pane.tabs ?? []));
   const candidates = defs.filter((def) => !openIds.has(def.id));
@@ -202,8 +194,6 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
                     state={state.pluginState?.[activeDef.id]}
                     onState={(next) => setPluginState(activeDef.id, next)}
                     scope={scope}
-                    controlValues={controlValues}
-                    onControlValues={(next) => setControlValues(pruneInactiveControls(next, scope))}
                   />
                 ) : (
                   <div className="dock-empty">[ no device ]</div>

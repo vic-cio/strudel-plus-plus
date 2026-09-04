@@ -56,7 +56,7 @@ export function createGainAudioAdapter(deps: GainAudioDeps) {
       const now = deps.now();
       parameter.cancelScheduledValues(now);
       parameter.setValueAtTime(validated.value, now);
-      return read();
+      return { kind: 'applied', value: validated.value };
     } catch {
       return { kind: 'unavailable', message: 'live audio output rejected the gain update' };
     }

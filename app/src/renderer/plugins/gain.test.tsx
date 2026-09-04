@@ -7,9 +7,7 @@ const { parameter, resolveController } = vi.hoisted(() => ({
   parameter: {
     value: 1,
     cancelScheduledValues: vi.fn(),
-    setValueAtTime: vi.fn(function (this: { value: number }, value: number) {
-      this.value = value;
-    }),
+    setValueAtTime: vi.fn(),
   },
   resolveController: vi.fn((): unknown => ({ output: { destinationGain: { gain: parameter } } })),
 }));
@@ -38,12 +36,13 @@ describe('GainControl', () => {
       throw new Error('gain control did not render a range input');
     }
     await waitFor(() => expect(input.value).toBe('0.4'));
-    expect(parameter.value).toBe(0.4);
+    expect(parameter.setValueAtTime).toHaveBeenCalledWith(0.4, 4);
 
     fireEvent.change(input, { target: { value: '0.65' } });
 
     await waitFor(() => expect(onState).toHaveBeenLastCalledWith({ value: 0.65 }));
-    expect(parameter.value).toBe(0.65);
+    expect(parameter.setValueAtTime).toHaveBeenLastCalledWith(0.65, 4);
+    expect(input.value).toBe('0.65');
     expect(screen.getByText('0.65')).toBeTruthy();
   });
 
@@ -56,6 +55,25 @@ describe('GainControl', () => {
     if (!(input instanceof HTMLInputElement)) {
       throw new Error('gain control did not render a range input');
     }
-    expect(input.disabled).toBe(true);
+    expect(input.disabled).toBe(false);
+  });
+
+  it('recovers once the live output becomes available again', async () => {
+    const onState = vi.fn();
+    resolveController.mockReturnValue(undefined);
+    render(<GainControl state={undefined} onState={onState} playing={true} />);
+
+    await screen.findByRole('alert');
+    const input = screen.getByRole('slider', { name: 'Gain' });
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error('gain control did not render a range input');
+    }
+
+    resolveController.mockReturnValue({ output: { destinationGain: { gain: parameter } } });
+    fireEvent.change(input, { target: { value: '0.25' } });
+
+    await waitFor(() => expect(onState).toHaveBeenLastCalledWith({ value: 0.25 }));
+    expect(parameter.setValueAtTime).toHaveBeenLastCalledWith(0.25, 4);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

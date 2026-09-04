@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { reportError } from '../reportErrors';
 import { registerPlugin } from './registry';
-import { createBrowserGainAudioAdapter, GAIN_CONTROL, type GainAudioAdapter, type GainAudioResult } from './gainAudio';
+import { createBrowserGainAudioAdapter, GAIN_CONTROL, type GainAudioAdapter } from './gainAudio';
 import type { PluginProps } from './registry';
 
 export type GainPluginState = { value: number };
@@ -14,11 +14,7 @@ function readStoredValue(state: unknown): number | undefined {
     return undefined;
   }
   const value = state.value;
-  return typeof value === 'number' ? value : undefined;
-}
-
-function messageFor(result: Exclude<GainAudioResult, { kind: 'applied' }>): string {
-  return result.message;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 export function GainControl({ state, onState, playing }: PluginProps) {
@@ -43,7 +39,7 @@ export function GainControl({ state, onState, playing }: PluginProps) {
           setValue(result.value);
           setError(undefined);
         } else {
-          setError(messageFor(result));
+          setError(result.message);
         }
       })
       .catch(() => {
@@ -66,7 +62,7 @@ export function GainControl({ state, onState, playing }: PluginProps) {
     }
     const result = adapter.set(next);
     if (result.kind !== 'applied') {
-      const message = messageFor(result);
+      const message = result.message;
       setError(message);
       reportError(new Error(message), 'gain');
       return;
@@ -89,7 +85,7 @@ export function GainControl({ state, onState, playing }: PluginProps) {
           max={GAIN_CONTROL.max}
           step={GAIN_CONTROL.step}
           value={value}
-          disabled={!ready || error !== undefined}
+          disabled={!ready}
           onChange={(event) => update(Number(event.currentTarget.value))}
         />
       </label>
@@ -102,6 +98,5 @@ registerPlugin({
   id: 'gain',
   label: 'GAIN',
   kind: 'functional',
-  controls: [GAIN_CONTROL],
   mount: GainControl,
 });
