@@ -1083,7 +1083,12 @@ export function App() {
         label="Resize plugin dock"
       />
 
-      <PluginDock dock={dock} onChange={setDock} playing={state.started} />
+      <PluginDock
+        dock={dock}
+        onChange={setDock}
+        playing={state.started}
+        scope={open === undefined ? {} : { beat: open }}
+      />
 
       <StatusBar
         root={root}

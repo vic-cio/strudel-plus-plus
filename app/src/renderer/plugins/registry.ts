@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { ControlContext, NumericControl, ScopedControlValues } from './controlModel';
 
 /** What a plugin does in its pane. Visual plugins draw; functional ones control. */
 export type PluginKind = 'visual' | 'functional';
@@ -13,6 +14,11 @@ export type PluginProps = {
   state: unknown;
   /** Replace the persisted slice. */
   onState: (state: unknown) => void;
+  /** The current owner context for controls that are not session-wide. */
+  scope?: ControlContext;
+  /** Renderer-only values for future beat/function controls. */
+  controlValues?: ScopedControlValues;
+  onControlValues?: (values: ScopedControlValues) => void;
 };
 
 export type PluginDef = {
@@ -21,6 +27,8 @@ export type PluginDef = {
   /** Tab label, shown between the brackets in the strip. */
   label: string;
   kind: PluginKind;
+  /** Declarative controls used by future panels and scoped-state cleanup. */
+  controls?: readonly NumericControl[];
   /** The component mounted into the pane, stretched to fill it. */
   mount: ComponentType<PluginProps>;
 };

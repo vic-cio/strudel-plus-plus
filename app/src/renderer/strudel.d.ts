@@ -49,7 +49,7 @@ declare module '@strudel/webaudio' {
   export function getAudioContext(): AudioContext;
   export function getAnalyzerData(type: 'time' | 'frequency', id: string | number): Float32Array;
   export const analysers: Record<string, AnalyserNode>;
-  export function getSuperdoughAudioController(): { output?: { destinationGain?: AudioNode } } | undefined;
+  export function getSuperdoughAudioController(): { output?: { destinationGain?: { gain?: AudioParam } } } | undefined;
 }
 declare module 'worker-timers' {
   export function setInterval(handler: () => void, ms: number): number;

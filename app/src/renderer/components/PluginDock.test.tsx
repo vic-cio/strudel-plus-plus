@@ -103,7 +103,7 @@ describe('PluginDock', () => {
     const names = within(screen.getByRole('menu'))
       .getAllByRole('menuitem')
       .map((item) => item.textContent);
-    expect(names).toEqual(['[ SCOPE ]', '[ KNOB ]']);
+    expect(names).toEqual(['[ GAIN ]', '[ SCOPE ]', '[ KNOB ]']);
   });
 
   it('switches the visible plugin from the tab strip', async () => {

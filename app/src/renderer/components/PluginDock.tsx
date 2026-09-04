@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { normalizeDockState, type DockPaneState, type DockState } from '../../shared/dockState';
 import { listPlugins } from '../plugins';
+import { pruneInactiveControls, type ControlContext, type ScopedControlValues } from '../plugins';
 import type { PluginDef } from '../plugins/registry';
 
 type Props = {
@@ -9,6 +10,8 @@ type Props = {
   onChange: (next: DockState) => void;
   /** True while the REPL runs; handed to visual plugins so they can idle. */
   playing: boolean;
+  /** Current beat/function owner for scoped controls. */
+  scope?: ControlContext;
 };
 
 /**
@@ -23,7 +26,7 @@ type Props = {
  * one pane full width for one that deserves it; both are remembered with the
  * session.
  */
-export function PluginDock({ dock, onChange, playing }: Props) {
+export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
   const defs = listPlugins();
   const byId = new Map<string, PluginDef>(defs.map((def) => [def.id, def]));
   // Render from canonical state, so a session file written by an older build
@@ -33,7 +36,15 @@ export function PluginDock({ dock, onChange, playing }: Props) {
     defs.map((def) => def.id),
   );
   const [menuPane, setMenuPane] = useState<number>();
+  // Unlike pluginState, this store is deliberately renderer-only. Session
+  // controls remain in dock.pluginState; beat/function controls disappear as
+  // soon as their owner changes and are never written to .session.json.
+  const [controlValues, setControlValues] = useState<ScopedControlValues>({});
   const rootRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    setControlValues((current) => pruneInactiveControls(current, scope));
+  }, [scope.beat, scope.functionName]);
 
   const openIds = new Set(state.panes.flatMap((pane) => pane.tabs ?? []));
   const candidates = defs.filter((def) => !openIds.has(def.id));
@@ -190,6 +201,9 @@ export function PluginDock({ dock, onChange, playing }: Props) {
                     playing={playing}
                     state={state.pluginState?.[activeDef.id]}
                     onState={(next) => setPluginState(activeDef.id, next)}
+                    scope={scope}
+                    controlValues={controlValues}
+                    onControlValues={(next) => setControlValues(pruneInactiveControls(next, scope))}
                   />
                 ) : (
                   <div className="dock-empty">[ no device ]</div>

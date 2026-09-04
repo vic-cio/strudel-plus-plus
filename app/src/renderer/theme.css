@@ -804,6 +804,37 @@ body[data-resizing='true'][data-resize-axis='row'] {
   text-transform: uppercase;
 }
 
+.gain-plugin {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  color: var(--ink);
+  font-size: 11px;
+}
+.gain-plugin label {
+  display: grid;
+  grid-template-columns: auto 4em minmax(120px, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: min(100%, 520px);
+}
+.gain-plugin output {
+  color: var(--gold);
+  font-family: var(--mono);
+  text-align: right;
+}
+.gain-plugin input {
+  accent-color: var(--gold);
+  min-width: 0;
+}
+.gain-plugin [role='alert'] {
+  margin-left: 12px;
+  color: var(--rust);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
 /* Status bar -------------------------------------------------------------- */
 
 .status {
