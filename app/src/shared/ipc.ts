@@ -26,6 +26,7 @@ export const CH = {
   oscSend: 'osc:send',
   midiSend: 'midi:send',
   midiPorts: 'midi:ports',
+  recordingSave: 'recording:save',
 } as const;
 
 export type BeatChange = {

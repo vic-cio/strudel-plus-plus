@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { installMasterTap, selectLiveTap } from './masterTap';
+import { installMasterTap, liveMasterStream, selectLiveTap } from './masterTap';
 
 class FakeDestination {
   constructor(public context: object) {}
@@ -100,6 +100,41 @@ describe('installMasterTap', () => {
     const destination = {};
     expect(() => proto.connect.call({}, destination)).not.toThrow();
     expect(calls).toEqual([destination]);
+  });
+
+  it('connects every engine that reaches the destination to the recording stream', () => {
+    // superdough's gain and the dough worklet reach AudioContext.destination
+    // separately. Wiring only whichever connected first leaves the other
+    // engine out of the exported take while the meters still show it.
+    const calls: { from: object; to: unknown }[] = [];
+    const proto = {
+      connect(this: object, target: unknown) {
+        calls.push({ from: this, to: target });
+        return target;
+      },
+    };
+    const stream = {} as MediaStream;
+    const streamDestination = { stream };
+    const analyser = { id: 'analyser' };
+    const context = { state: 'running' };
+    const taps = installMasterTap({
+      proto,
+      isDestination: (target) => target instanceof FakeDestination,
+      contextOf: (target) => (target as FakeDestination).context,
+      createAnalyser: () => analyser,
+      createMediaStreamDestination: () => streamDestination,
+    });
+    const superdough = { id: 'superdough' };
+    const worklet = { id: 'worklet' };
+
+    proto.connect.call(superdough, new FakeDestination(context));
+    proto.connect.call(worklet, new FakeDestination(context));
+
+    expect(liveMasterStream(taps)).toBe(stream);
+    for (const node of [superdough, worklet]) {
+      expect(calls.filter((call) => call.from === node).map((call) => call.to)).toContain(streamDestination);
+      expect(calls.filter((call) => call.from === node).map((call) => call.to)).toContain(analyser);
+    }
   });
 
   it('patches the prototype only once', () => {

@@ -36,6 +36,18 @@ import { clampCps, hasCodedTempo } from '../shared/tempo';
 import { normalizeDockState, type DockState } from '../shared/dockState';
 import type { BeatChange } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
+import {
+  DEFAULT_RECORDING_SETTINGS,
+  RECORDING_MODES,
+  recordingFailureMessage,
+  recordingSource,
+  type RecordingMode,
+} from '../shared/recording';
+import { startRecording, type RecordingCapture } from './recording';
+
+function isRecordingMode(value: string | null): value is RecordingMode {
+  return RECORDING_MODES.some((item) => item.mode === value);
+}
 
 /** Pane widths survive a restart. A layout you set once should stay set. */
 function usePaneWidth(key: string, fallback: number) {
@@ -99,6 +111,17 @@ export function App() {
   // each device's own faders. Session-scoped like the tempo map — switching
   // beats must not close the mixer.
   const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
+  const [recordingMode, setRecordingMode] = useState<RecordingMode>(() => {
+    try {
+      const value = localStorage.getItem('recording.mode');
+      return isRecordingMode(value) ? value : DEFAULT_RECORDING_SETTINGS.mode;
+    } catch {
+      return DEFAULT_RECORDING_SETTINGS.mode;
+    }
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [savingTake, setSavingTake] = useState(false);
 
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
@@ -106,6 +129,9 @@ export function App() {
   const pendingRenameRef = useRef<{ from: string; to: string } | undefined>(undefined);
   const beatActivationRef = useRef(0);
   const diskChangeVersionRef = useRef(new Map<string, number>());
+  const lastSuccessfulBufferRef = useRef<string | undefined>(undefined);
+  const recordingRef = useRef<RecordingCapture | undefined>(undefined);
+  const savingTakeRef = useRef(false);
   const beatsRef = useRef<BeatSummary[]>([]);
   const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
   const manualBeatOrderRef = useRef<string[]>([]);
@@ -166,8 +192,59 @@ export function App() {
     [updateDraftState],
   );
 
+  const onSuccessfulEval = useCallback((code: string) => {
+    lastSuccessfulBufferRef.current = code;
+  }, []);
   const { containerRef, state, setCode, getCode, clearError, toggle, cps, changeCps, releaseCps, reevaluate } =
-    useStrudel(onCodeChange);
+    useStrudel(onCodeChange, onSuccessfulEval);
+
+  const changeRecordingMode = useCallback((mode: RecordingMode) => {
+    setRecordingMode(mode);
+    try {
+      localStorage.setItem('recording.mode', mode);
+    } catch {
+      // Settings remain usable for this run when storage is unavailable.
+    }
+  }, []);
+
+  const record = useCallback(async () => {
+    if (savingTakeRef.current) {
+      return;
+    }
+    const capture = recordingRef.current;
+    if (capture) {
+      recordingRef.current = undefined;
+      savingTakeRef.current = true;
+      setSavingTake(true);
+      setRecording(false);
+      try {
+        const blob = await capture.stop();
+        await desktop.recording.save(
+          new Uint8Array(await blob.arrayBuffer()),
+          `${open?.replace(/\.js$/, '') ?? 'take'}.${capture.extension}`,
+        );
+      } catch (error) {
+        setBeatError(recordingFailureMessage(error));
+      } finally {
+        savingTakeRef.current = false;
+        setSavingTake(false);
+      }
+      return;
+    }
+    const source = recordingSource(lastSuccessfulBufferRef.current);
+    if (!source) {
+      setBeatError('Recording failed: evaluate a full buffer before recording.');
+      return;
+    }
+    try {
+      recordingRef.current = startRecording(recordingMode, source);
+      setRecording(true);
+      setBeatError(undefined);
+    } catch (error) {
+      recordingRef.current = undefined;
+      setBeatError(recordingFailureMessage(error));
+    }
+  }, [open, recordingMode]);
   const sessionOperationTail = useRef<Promise<void>>(Promise.resolve());
   const queueSessionOperation = useCallback((operation: () => Promise<void>): Promise<void> => {
     const current = sessionOperationTail.current.then(operation, operation);
@@ -228,6 +305,7 @@ export function App() {
   const showBeat = useCallback(
     (name: string, content: string) => {
       beatActivationRef.current += 1;
+      lastSuccessfulBufferRef.current = undefined;
       bufferRef.current = content;
       setBuffer(content);
       openRef.current = name;
@@ -993,6 +1071,16 @@ export function App() {
         </span>
         <span className="transport right">
           <button
+            onClick={() => void record()}
+            disabled={!open || savingTake}
+            title={recording ? 'Stop recording' : 'Record'}
+          >
+            {recording ? '■ stop rec' : `● record [${recordingMode}]`}
+          </button>
+          <button className="collapse" onClick={() => setShowSettings((shown) => !shown)} title="Recording settings">
+            [ settings ]
+          </button>
+          <button
             className="collapse"
             onClick={() => setTermOpen(termOpen ? 0 : 1)}
             title={termOpen ? 'Hide harness' : 'Show harness'}
@@ -1093,7 +1181,30 @@ export function App() {
         cps={cps}
         harness={harness}
         error={state.error?.message}
+        recordingMode={recordingMode}
       />
+      {showSettings && (
+        <div className="settings-popover" role="dialog" aria-label="Recording settings">
+          <b>recording form</b>
+          <label>
+            Record button produces
+            <select
+              value={recordingMode}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (isRecordingMode(value)) changeRecordingMode(value);
+              }}
+            >
+              {RECORDING_MODES.map((item) => (
+                <option key={item.mode} value={item.mode}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button onClick={() => setShowSettings(false)}>close</button>
+        </div>
+      )}
     </div>
   );
 }

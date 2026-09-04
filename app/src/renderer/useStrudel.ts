@@ -50,7 +50,7 @@ export type ReplState = {
   error?: Error;
 };
 
-export function useStrudel(onCodeChange: (code: string) => void) {
+export function useStrudel(onCodeChange: (code: string) => void, onSuccessfulEval?: (code: string) => void) {
   const pollRef = useRef<number>(undefined);
   const editorRef = useRef<StrudelMirror>(undefined);
   const pendingCodeRef = useRef<string | undefined>(undefined);
@@ -104,6 +104,7 @@ export function useStrudel(onCodeChange: (code: string) => void) {
         beforeEval: () => audioReady,
         onUpdateState: (next: ReplState) => setState({ ...next }),
         afterEval: () => {
+          onSuccessfulEval?.(editor.code ?? '');
           if (chosenCps.current !== undefined) {
             editor.repl.setCps(chosenCps.current);
           }
@@ -136,7 +137,7 @@ export function useStrudel(onCodeChange: (code: string) => void) {
         }
       }, 120);
     },
-    [destroyEditor],
+    [destroyEditor, onSuccessfulEval],
   );
 
   useEffect(() => destroyEditor, [destroyEditor]);

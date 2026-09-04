@@ -2,7 +2,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
-import { BrowserWindow, app, ipcMain, shell } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
 import { createBeatStore } from './beats';
 import { augmentPath, loginShellPath } from './env';
 import { ensurePtyHelper } from './ptyHelper';
@@ -16,6 +16,7 @@ import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
 import type { SessionOpenResult, SessionState } from '../shared/session';
+import { writeRecording } from './recordingExport';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html',
@@ -235,6 +236,14 @@ async function main() {
   ipcMain.on(CH.oscSend, (_event, message: OscMessage) => osc.send(message));
   ipcMain.on(CH.midiSend, (_event, messages: MidiMessage[]) => midi.send(messages));
   ipcMain.handle(CH.midiPorts, () => midi.ports());
+  ipcMain.handle(CH.recordingSave, async (_event, data: Uint8Array, suggestedName: string) => {
+    const chosen = await dialog.showSaveDialog(window, { defaultPath: suggestedName });
+    if (chosen.canceled || !chosen.filePath) {
+      return undefined;
+    }
+    await writeRecording(chosen.filePath, data);
+    return chosen.filePath;
+  });
 
   async function openSession(name: string): Promise<SessionOpenResult> {
     if (!(await sessions.has(name))) {

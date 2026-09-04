@@ -6,9 +6,10 @@ type Props = {
   cps: number;
   harness: string;
   error: string | undefined;
+  recordingMode: string;
 };
 
-export function StatusBar({ root, beat, dirty, playing, cps, harness, error }: Props) {
+export function StatusBar({ root, beat, dirty, playing, cps, harness, error, recordingMode }: Props) {
   return (
     <footer className="status">
       <span className={`slot ${playing ? 'on' : 'off'}`}>{playing ? '● playing' : '○ stopped'}</span>
@@ -19,6 +20,7 @@ export function StatusBar({ root, beat, dirty, playing, cps, harness, error }: P
         {dirty ? ' *' : ''}
       </span>
       <span className="slot">harness: {harness}</span>
+      <span className="slot">rec: {recordingMode}</span>
       {error && (
         <span className="slot warn" title={error}>
           {error}

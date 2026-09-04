@@ -3,9 +3,11 @@ export type TapDeps = {
   isDestination: (target: unknown) => boolean;
   contextOf: (target: unknown) => object;
   createAnalyser: (context: object) => object;
+  createMediaStreamDestination?: (context: object) => { stream: MediaStream };
 };
 
 const patched = new WeakMap<object, Map<object, object>>();
+const streams = new WeakMap<Map<object, object>, Map<object, { stream: MediaStream }>>();
 
 /**
  * Listen to everything that reaches the speakers.
@@ -23,6 +25,8 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
   }
 
   const taps = new Map<object, object>();
+  const contextStreams = new Map<object, { stream: MediaStream }>();
+  streams.set(taps, contextStreams);
   const original = deps.proto.connect;
 
   deps.proto.connect = function (this: object, ...args: never[]) {
@@ -35,8 +39,15 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
         if (!tap) {
           tap = deps.createAnalyser(context);
           taps.set(context, tap);
+          if (deps.createMediaStreamDestination) {
+            contextStreams.set(context, deps.createMediaStreamDestination(context));
+          }
         }
         original.call(this, tap as never);
+        const recordingDestination = contextStreams.get(context);
+        if (recordingDestination) {
+          original.call(this, recordingDestination as never);
+        }
       } catch {
         // Never let a meter cost the audio.
       }
@@ -46,6 +57,26 @@ export function installMasterTap(deps: TapDeps): Map<object, object> {
 
   patched.set(deps.proto, taps);
   return taps;
+}
+
+/**
+ * Every engine that reaches the speakers is connected to the recording
+ * destination, not just the first one that created it, so a take carries the
+ * same mix the meters show.
+ */
+export function liveMasterStream(taps: Map<object, object>): MediaStream | undefined {
+  let fallback: MediaStream | undefined;
+  for (const [context, destination] of streams.get(taps) ?? []) {
+    if ((context as TapContext).state === 'closed') {
+      streams.get(taps)?.delete(context);
+      continue;
+    }
+    if ((context as TapContext).state === 'running') {
+      return destination.stream;
+    }
+    fallback = destination.stream;
+  }
+  return fallback;
 }
 
 type TapContext = { state?: string; resume?: () => Promise<void> };
