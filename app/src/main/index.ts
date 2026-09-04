@@ -303,7 +303,7 @@ async function main() {
   }
 
   ipcMain.handle(CH.sessionsRoot, () => root);
-  ipcMain.handle(CH.sessionsRootStatus, () => rootSetting.load());
+  ipcMain.handle(CH.sessionsRootStatus, async () => await rootSetting.load());
   // Re-rooting is only offered while no session is open, so the beat store,
   // watcher and harness are not yet bound to a folder under the old root and
   // the new root takes effect without a restart.

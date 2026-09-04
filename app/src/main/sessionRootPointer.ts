@@ -2,7 +2,6 @@ import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import type { SessionRootStatus } from '../shared/ipc';
 
-
 export type SessionRootSetting = {
   load(): Promise<SessionRootStatus>;
   save(path: string): Promise<void>;
@@ -26,7 +25,11 @@ export function createSessionRootSetting(configDir: string): SessionRootSetting 
         // No pointer yet is the fresh-install state, not a failure to report.
         if (errorCode(e) === 'ENOENT') return { state: 'unconfigured' };
         const code = errorCode(e);
-        return { state: 'invalid', path: pointerPath, error: code ? `Cannot read pointer (${code})` : 'Pointer unreadable' };
+        return {
+          state: 'invalid',
+          path: pointerPath,
+          error: code ? `Cannot read pointer (${code})` : 'Pointer unreadable',
+        };
       }
       if (trimmed === '') return { state: 'unconfigured' };
       const path = resolve(trimmed);
