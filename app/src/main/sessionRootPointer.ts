@@ -6,65 +6,45 @@ export type SessionRootPointer = SessionRootStatus;
 
 export type SessionRootSetting = {
   load(): Promise<SessionRootPointer>;
-  save(path: string | null): Promise<void>;
+  save(path: string): Promise<void>;
 };
 
 const POINTER_FILE = '.strudel-sessions-root';
 
-export async function createSessionRootSetting(configDir: string): Promise<SessionRootSetting> {
+function errorCode(e: unknown): string | undefined {
+  return typeof e === 'object' && e !== null && 'code' in e ? (e as { code?: string }).code : undefined;
+}
+
+export function createSessionRootSetting(configDir: string): SessionRootSetting {
   const pointerPath = join(configDir, POINTER_FILE);
 
   return {
     async load(): Promise<SessionRootPointer> {
+      let trimmed: string;
       try {
-        const raw = await readFile(pointerPath, 'utf8');
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          return { path: null, valid: false, readable: false, isDirectory: false, error: 'Pointer file is empty' };
-        }
-        const resolved = resolve(trimmed);
-        try {
-          const info = await stat(resolved);
-          if (!info.isDirectory()) {
-            return {
-              path: resolved,
-              valid: true,
-              readable: true,
-              isDirectory: false,
-              error: 'Configured root is not a directory',
-            };
-          }
-          return { path: resolved, valid: true, readable: true, isDirectory: true };
-        } catch (e: unknown) {
-          const code = typeof e === 'object' && e !== null && 'code' in e ? (e as { code?: string }).code : undefined;
-          return {
-            path: resolved,
-            valid: true,
-            readable: false,
-            isDirectory: false,
-            error: code ? `Root unavailable (${code})` : 'Root unavailable',
-          };
-        }
+        trimmed = (await readFile(pointerPath, 'utf8')).trim();
       } catch (e: unknown) {
-        const code = typeof e === 'object' && e !== null && 'code' in e ? (e as { code?: string }).code : undefined;
-        return {
-          path: null,
-          valid: false,
-          readable: false,
-          isDirectory: false,
-          error: code ? `Cannot read pointer (${code})` : 'Pointer missing or unreadable',
-        };
+        // No pointer yet is the fresh-install state, not a failure to report.
+        if (errorCode(e) === 'ENOENT') return { state: 'unconfigured' };
+        const code = errorCode(e);
+        return { state: 'invalid', path: pointerPath, error: code ? `Cannot read pointer (${code})` : 'Pointer unreadable' };
+      }
+      if (!trimmed) return { state: 'unconfigured' };
+      const path = resolve(trimmed);
+      try {
+        const info = await stat(path);
+        if (!info.isDirectory()) return { state: 'invalid', path, error: 'Configured root is not a directory' };
+        return { state: 'ok', path };
+      } catch (e: unknown) {
+        const code = errorCode(e);
+        return { state: 'invalid', path, error: code ? `Root unavailable (${code})` : 'Root unavailable' };
       }
     },
-    async save(path: string | null): Promise<void> {
-      await mkdir(configDir, { recursive: true });
-      if (path === null) {
-        await writeFile(pointerPath, '\n', 'utf8');
-        return;
-      }
+    async save(path: string): Promise<void> {
       const resolved = resolve(path);
       const info = await stat(resolved);
       if (!info.isDirectory()) throw new Error('Session root must be a directory');
+      await mkdir(configDir, { recursive: true });
       // This is intentionally a pointer-only operation.
       await writeFile(pointerPath, resolved + '\n', 'utf8');
     },

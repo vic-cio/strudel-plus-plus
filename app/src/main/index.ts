@@ -87,14 +87,11 @@ process.on('unhandledRejection', (reason) => {
 async function main() {
   await app.whenReady();
 
-  const userData = typeof app.getPath === 'function' ? app.getPath('userData') : process.cwd();
-  const rootSetting = await createSessionRootSetting(userData);
+  const rootSetting = createSessionRootSetting(app.getPath('userData'));
   const configuredRoot = await rootSetting.load();
-  const root =
-    configuredRoot.valid && configuredRoot.readable && configuredRoot.isDirectory && configuredRoot.path
-      ? configuredRoot.path
-      : await resolveSessionsRoot();
-  const sessions = createSessionStore(root);
+  // The pointer names the folder; the app never moves what lives there.
+  let root = configuredRoot.state === 'ok' ? configuredRoot.path : await resolveSessionsRoot();
+  let sessions = createSessionStore(root);
   const library = createBundledLibrary();
 
   // Everything below hangs off which session is open: the beat store is rooted
@@ -306,12 +303,23 @@ async function main() {
   }
 
   ipcMain.handle(CH.sessionsRoot, () => root);
-  ipcMain.handle(CH.sessionsRootStatus, () => configuredRoot);
+  ipcMain.handle(CH.sessionsRootStatus, () => rootSetting.load());
+  // Re-rooting is only offered while no session is open, so the beat store,
+  // watcher and harness are not yet bound to a folder under the old root and
+  // the new root takes effect without a restart.
   ipcMain.handle(CH.sessionsChooseRoot, async () => {
+    if (active) throw new Error('Close the current session before changing the sessions folder');
     const result = await dialog.showOpenDialog(window, { properties: ['openDirectory', 'createDirectory'] });
-    if (result.canceled || result.filePaths[0] === undefined) return configuredRoot;
+    if (result.canceled || result.filePaths[0] === undefined) return rootSetting.load();
     await rootSetting.save(result.filePaths[0]);
-    return rootSetting.load();
+    const status = await rootSetting.load();
+    if (status.state === 'ok') {
+      root = status.path;
+      sessions = createSessionStore(root);
+      store = createBeatStore(root);
+      config.beatsRoot = root;
+    }
+    return status;
   });
   ipcMain.handle(CH.sessionsList, () => sessions.list());
   ipcMain.handle(CH.sessionsActive, () => active);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { SessionRootStatus } from '../../shared/ipc';
 
 export type SessionSummary = { name: string; beats: number; usedAt: number };
 
@@ -10,9 +11,10 @@ type Props = {
   onCreate: (name: string) => void;
   onRemove: (name: string) => void;
   onCancel: (() => void) | undefined;
-  rootStatus?: { valid: boolean; readable: boolean; isDirectory: boolean; error?: string } | undefined;
+  rootStatus?: SessionRootStatus | undefined;
   onChooseRoot?: (() => void) | undefined;
   library?: { name: string; session: string }[];
+  readLibraryBeat?: ((name: string) => Promise<string>) | undefined;
 };
 
 function when(usedAt: number): string {
@@ -47,11 +49,26 @@ export function SessionPicker({
   rootStatus,
   onChooseRoot,
   library = [],
+  readLibraryBeat,
 }: Props) {
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
   const [selected, setSelected] = useState(0);
+  const [preview, setPreview] = useState<{ name: string; content: string }>();
   const input = useRef<HTMLInputElement>(null);
+
+  // Bundled beats are readable but never editable: the preview is the whole
+  // exposure, and a second click closes it.
+  function showLibraryBeat(beatName: string): void {
+    if (preview?.name === beatName || !readLibraryBeat) {
+      setPreview(undefined);
+      return;
+    }
+    void readLibraryBeat(beatName).then(
+      (content) => setPreview({ name: beatName, content }),
+      () => setPreview(undefined),
+    );
+  }
 
   useEffect(() => {
     if (naming) {
@@ -126,15 +143,22 @@ export function SessionPicker({
           <section aria-label="Bundled library" className="picker-library">
             <p className="picker-sub">bundled library · read-only</p>
             {library.map((beat) => (
-              <span className="picker-meta" key={beat.name}>
+              <button className="picker-meta" key={beat.name} onClick={() => showLibraryBeat(beat.name)}>
                 {beat.name}
-              </span>
+              </button>
             ))}
+            {preview && (
+              <pre aria-label={`Bundled beat ${preview.name}`} className="picker-preview">
+                {preview.content}
+              </pre>
+            )}
           </section>
         )}
 
         {error && <p className="tree-error">{error}</p>}
-        {rootStatus?.error && <p className="tree-error">Session folder unavailable: {rootStatus.error}</p>}
+        {rootStatus?.state === 'invalid' && (
+          <p className="tree-error">Session folder unavailable: {rootStatus.error}</p>
+        )}
 
         <footer className="picker-foot">
           {naming ? (

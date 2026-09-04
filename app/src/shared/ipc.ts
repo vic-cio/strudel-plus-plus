@@ -32,13 +32,14 @@ export const CH = {
   midiPorts: 'midi:ports',
 } as const;
 
-export type SessionRootStatus = {
-  path: string | null;
-  valid: boolean;
-  readable: boolean;
-  isDirectory: boolean;
-  error?: string;
-};
+/**
+ * One configured-root state, so the main-process gate and the picker message
+ * both switch on the same thing.
+ */
+export type SessionRootStatus =
+  | { state: 'unconfigured' }
+  | { state: 'ok'; path: string }
+  | { state: 'invalid'; path: string; error: string };
 
 export type BeatChange = {
   /** Path relative to the beats root, using forward slashes. */

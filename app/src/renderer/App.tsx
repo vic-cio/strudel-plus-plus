@@ -34,7 +34,7 @@ import { STARTER_BEAT } from '../shared/starterBeat';
 import { resolveDiskChange } from '../shared/sync';
 import { clampCps, hasCodedTempo } from '../shared/tempo';
 import { normalizeDockState, type DockState } from '../shared/dockState';
-import type { BeatChange } from '../shared/ipc';
+import type { BeatChange, SessionRootStatus } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
 
 /** Pane widths survive a restart. A layout you set once should stay set. */
@@ -73,12 +73,7 @@ function sameOrder(left: string[], right: string[]): boolean {
 
 export function App() {
   const [root, setRoot] = useState('');
-  const [rootStatus, setRootStatus] = useState<{
-    valid: boolean;
-    readable: boolean;
-    isDirectory: boolean;
-    error?: string;
-  }>();
+  const [rootStatus, setRootStatus] = useState<SessionRootStatus>();
   const [library, setLibrary] = useState<{ name: string; session: string }[]>([]);
   const [beats, setBeats] = useState<BeatSummary[]>([]);
   const [beatSort, setBeatSort] = useState<BeatSortMode>(DEFAULT_BEAT_SORT);
@@ -305,14 +300,20 @@ export function App() {
   useEffect(() => {
     void (async () => {
       setRoot(await desktop.sessions.root());
-      setRootStatus(await desktop.sessions.rootStatus());
       setSessions(await desktop.sessions.list());
       const available = await desktop.harness.list();
       setHarnesses(available);
       setHarness(available[0]?.id ?? 'shell');
-      if (desktop.library) {
-        setLibrary(await desktop.library.list());
-      }
+      // The settings surfaces are optional extras: a failure to load them must
+      // not take the session list and the harness down with it.
+      await desktop.sessions
+        .rootStatus()
+        .then(setRootStatus)
+        .catch(() => setRootStatus(undefined));
+      await desktop.library
+        .list()
+        .then(setLibrary)
+        .catch(() => setLibrary([]));
     })();
   }, []);
 
@@ -881,6 +882,23 @@ export function App() {
     setPicking(false);
   }, [setCode]);
 
+  // The main process re-roots itself on a successful choice, so the picker
+  // must re-read the root and the session list it now serves.
+  const chooseRoot = useCallback(() => {
+    void (async () => {
+      try {
+        const status = await desktop.sessions.chooseRoot();
+        setRootStatus(status);
+        setRoot(await desktop.sessions.root());
+        setSessions(await desktop.sessions.list());
+      } catch (error) {
+        setBeatError(error instanceof Error ? error.message : String(error));
+      }
+    })();
+  }, []);
+
+  const readLibraryBeat = useCallback((name: string) => desktop.library.read(name), []);
+
   useEffect(() => {
     // FileTree is unmounted when the sidebar is collapsed. Its naming/delete
     // draft therefore belongs in App, and stale targets must be retired when
@@ -966,13 +984,9 @@ export function App() {
         onRemove={removeSession}
         onCancel={session ? cancelSessionPicker : undefined}
         rootStatus={rootStatus}
-        onChooseRoot={() =>
-          void desktop.sessions
-            .chooseRoot()
-            .then(setRootStatus)
-            .catch((error) => setBeatError(error instanceof Error ? error.message : String(error)))
-        }
+        onChooseRoot={session ? undefined : chooseRoot}
         library={library}
+        readLibraryBeat={readLibraryBeat}
       />
     );
   }

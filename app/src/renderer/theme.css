@@ -234,6 +234,32 @@ button:disabled {
 .picker-meta {
   white-space: nowrap;
 }
+.picker-library {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.picker-library .picker-sub {
+  flex-basis: 100%;
+}
+.picker-preview {
+  flex-basis: 100%;
+  min-width: 0;
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: var(--ink-faint);
+}
+.picker-root-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .picker-foot {
   display: flex;
   align-items: center;

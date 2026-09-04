@@ -63,6 +63,8 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
   const desktop = {
     sessions: {
       root: vi.fn(async () => '/sessions-root'),
+      rootStatus: vi.fn(async () => ({ state: 'ok', path: '/sessions-root' })),
+      chooseRoot: vi.fn(async () => ({ state: 'ok', path: '/sessions-root' })),
       list: vi.fn(async () => [{ name: 'we cook', beats: 2, usedAt: 1 }]),
       active: vi.fn(async () => 'we cook'),
       create: vi.fn(openSessionResult),
@@ -70,6 +72,10 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
       open: vi.fn(openSessionResult),
       state: sessionState,
       setState: setStateMock,
+    },
+    library: {
+      list: vi.fn(async () => [{ name: 'we begin.js', session: 'we cook' }]),
+      read: vi.fn(async (name: string) => `// bundled ${name}`),
     },
     beats: {
       root: vi.fn(async () => '/sessions-root/we cook'),
