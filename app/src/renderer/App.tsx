@@ -73,6 +73,13 @@ function sameOrder(left: string[], right: string[]): boolean {
 
 export function App() {
   const [root, setRoot] = useState('');
+  const [rootStatus, setRootStatus] = useState<{
+    valid: boolean;
+    readable: boolean;
+    isDirectory: boolean;
+    error?: string;
+  }>();
+  const [library, setLibrary] = useState<{ name: string; session: string }[]>([]);
   const [beats, setBeats] = useState<BeatSummary[]>([]);
   const [beatSort, setBeatSort] = useState<BeatSortMode>(DEFAULT_BEAT_SORT);
   const [manualBeatOrder, setManualBeatOrder] = useState<string[]>([]);
@@ -298,10 +305,14 @@ export function App() {
   useEffect(() => {
     void (async () => {
       setRoot(await desktop.sessions.root());
+      setRootStatus(await desktop.sessions.rootStatus());
       setSessions(await desktop.sessions.list());
       const available = await desktop.harness.list();
       setHarnesses(available);
       setHarness(available[0]?.id ?? 'shell');
+      if (desktop.library) {
+        setLibrary(await desktop.library.list());
+      }
     })();
   }, []);
 
@@ -954,6 +965,14 @@ export function App() {
         onCreate={(name) => void openSession(name, true)}
         onRemove={removeSession}
         onCancel={session ? cancelSessionPicker : undefined}
+        rootStatus={rootStatus}
+        onChooseRoot={() =>
+          void desktop.sessions
+            .chooseRoot()
+            .then(setRootStatus)
+            .catch((error) => setBeatError(error instanceof Error ? error.message : String(error)))
+        }
+        library={library}
       />
     );
   }

@@ -1,6 +1,8 @@
 /** Channel names shared by the main process and the preload bridge. */
 export const CH = {
   sessionsRoot: 'sessions:root',
+  sessionsRootStatus: 'sessions:rootStatus',
+  sessionsChooseRoot: 'sessions:chooseRoot',
   sessionsList: 'sessions:list',
   sessionsCreate: 'sessions:create',
   sessionsRemove: 'sessions:remove',
@@ -17,6 +19,8 @@ export const CH = {
   beatsRename: 'beats:rename',
   beatsRemove: 'beats:remove',
   beatsChanged: 'beats:changed',
+  libraryList: 'library:list',
+  libraryRead: 'library:read',
   harnessList: 'harness:list',
   ptyStart: 'pty:start',
   ptyWrite: 'pty:write',
@@ -27,6 +31,14 @@ export const CH = {
   midiSend: 'midi:send',
   midiPorts: 'midi:ports',
 } as const;
+
+export type SessionRootStatus = {
+  path: string | null;
+  valid: boolean;
+  readable: boolean;
+  isDirectory: boolean;
+  error?: string;
+};
 
 export type BeatChange = {
   /** Path relative to the beats root, using forward slashes. */

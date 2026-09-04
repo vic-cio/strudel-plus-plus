@@ -10,6 +10,9 @@ type Props = {
   onCreate: (name: string) => void;
   onRemove: (name: string) => void;
   onCancel: (() => void) | undefined;
+  rootStatus?: { valid: boolean; readable: boolean; isDirectory: boolean; error?: string } | undefined;
+  onChooseRoot?: (() => void) | undefined;
+  library?: { name: string; session: string }[];
 };
 
 function when(usedAt: number): string {
@@ -33,7 +36,18 @@ function when(usedAt: number): string {
  * The most recent session is selected on arrival and enter takes it, so the
  * common case is one keypress between launching and playing.
  */
-export function SessionPicker({ sessions, root, error, onOpen, onCreate, onRemove, onCancel }: Props) {
+export function SessionPicker({
+  sessions,
+  root,
+  error,
+  onOpen,
+  onCreate,
+  onRemove,
+  onCancel,
+  rootStatus,
+  onChooseRoot,
+  library = [],
+}: Props) {
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
   const [selected, setSelected] = useState(0);
@@ -108,7 +122,19 @@ export function SessionPicker({ sessions, root, error, onOpen, onCreate, onRemov
           ))}
         </div>
 
+        {library.length > 0 && (
+          <section aria-label="Bundled library" className="picker-library">
+            <p className="picker-sub">bundled library · read-only</p>
+            {library.map((beat) => (
+              <span className="picker-meta" key={beat.name}>
+                {beat.name}
+              </span>
+            ))}
+          </section>
+        )}
+
         {error && <p className="tree-error">{error}</p>}
+        {rootStatus?.error && <p className="tree-error">Session folder unavailable: {rootStatus.error}</p>}
 
         <footer className="picker-foot">
           {naming ? (
@@ -137,9 +163,12 @@ export function SessionPicker({ sessions, root, error, onOpen, onCreate, onRemov
         </footer>
       </div>
 
-      <p className="picker-root" title={root}>
-        {root}
-      </p>
+      <div className="picker-root-row">
+        <p className="picker-root" title={root}>
+          {root}
+        </p>
+        {onChooseRoot && <button onClick={onChooseRoot}>settings: choose sessions folder</button>}
+      </div>
     </div>
   );
 }

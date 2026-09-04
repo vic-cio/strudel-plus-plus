@@ -2,7 +2,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
-import { BrowserWindow, app, ipcMain, shell } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
 import { createBeatStore } from './beats';
 import { augmentPath, loginShellPath } from './env';
 import { ensurePtyHelper } from './ptyHelper';
@@ -12,6 +12,8 @@ import { createSessionStore } from './sessions';
 import { resolveSessionsRoot } from './sessionsRoot';
 import { createPtyHost } from './pty';
 import { watchBeats } from './watcher';
+import { createSessionRootSetting } from './sessionRootPointer';
+import { createBundledLibrary } from './bundledLibrary';
 import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
@@ -85,8 +87,15 @@ process.on('unhandledRejection', (reason) => {
 async function main() {
   await app.whenReady();
 
-  const root = await resolveSessionsRoot();
+  const userData = typeof app.getPath === 'function' ? app.getPath('userData') : process.cwd();
+  const rootSetting = await createSessionRootSetting(userData);
+  const configuredRoot = await rootSetting.load();
+  const root =
+    configuredRoot.valid && configuredRoot.readable && configuredRoot.isDirectory && configuredRoot.path
+      ? configuredRoot.path
+      : await resolveSessionsRoot();
   const sessions = createSessionStore(root);
+  const library = createBundledLibrary();
 
   // Everything below hangs off which session is open: the beat store is rooted
   // in it, the watcher follows it, and the harness runs inside it so the agent
@@ -297,6 +306,13 @@ async function main() {
   }
 
   ipcMain.handle(CH.sessionsRoot, () => root);
+  ipcMain.handle(CH.sessionsRootStatus, () => configuredRoot);
+  ipcMain.handle(CH.sessionsChooseRoot, async () => {
+    const result = await dialog.showOpenDialog(window, { properties: ['openDirectory', 'createDirectory'] });
+    if (result.canceled || result.filePaths[0] === undefined) return configuredRoot;
+    await rootSetting.save(result.filePaths[0]);
+    return rootSetting.load();
+  });
   ipcMain.handle(CH.sessionsList, () => sessions.list());
   ipcMain.handle(CH.sessionsActive, () => active);
   ipcMain.handle(CH.sessionsCreate, (_event, name: string) =>
@@ -316,6 +332,8 @@ async function main() {
   ipcMain.handle(CH.sessionsOpen, (_event, name: string) => queueSessionTransition(() => openSession(name)));
   ipcMain.handle(CH.sessionsState, (_event, name: string) => sessions.getState(name));
   ipcMain.handle(CH.sessionsSetState, (_event, name: string, state: SessionState) => sessions.setState(name, state));
+  ipcMain.handle(CH.libraryList, () => library.list());
+  ipcMain.handle(CH.libraryRead, (_event, name: string) => library.read(name));
 
   let server: Server | undefined;
   const devServer = process.env.ELECTRON_RENDERER_URL;
