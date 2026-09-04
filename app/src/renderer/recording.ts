@@ -45,7 +45,11 @@ function videoSurface(audio: MediaStream, source: string): Surface {
     context.fillText('strudel++ recording', 56, 74);
     context.font = '20px monospace';
     context.fillText(source.slice(0, 88), 56, 120);
-    context.fillText(`${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`, 56, 160);
+    context.fillText(
+      `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`,
+      56,
+      160,
+    );
     frame = requestAnimationFrame(paint);
   };
   paint();
