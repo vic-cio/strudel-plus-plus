@@ -7,6 +7,17 @@
  * holds, and session state remembers them by id.
  */
 import './eq';
+import './gain';
 
 export { getPlugin, listPlugins, registerPlugin } from './registry';
 export type { PluginDef, PluginKind, PluginProps } from './registry';
+export {
+  isControlScopeActive,
+  pruneInactiveControls,
+  validateControlValue,
+  type ControlContext,
+  type ControlScope,
+  type NumericControl,
+  type ScopedControlValue,
+  type ScopedControlValues,
+} from './controlModel';

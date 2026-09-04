@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { ControlContext } from './controlModel';
 
 /** What a plugin does in its pane. Visual plugins draw; functional ones control. */
 export type PluginKind = 'visual' | 'functional';
@@ -13,6 +14,8 @@ export type PluginProps = {
   state: unknown;
   /** Replace the persisted slice. */
   onState: (state: unknown) => void;
+  /** The current owner context for controls that are not session-wide. */
+  scope?: ControlContext;
 };
 
 export type PluginDef = {
