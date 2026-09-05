@@ -70,7 +70,7 @@ export function RecordControl({ mode, source, masterAvailable, onEvent }: Record
     captureRef.current = null;
     try {
       onEvent({ kind: 'stop', capture });
-      const blob = await capture.stop();
+      await capture.stop();
       // Atomic export: send to main via props event; test mocks the handler.
       onEvent({ kind: 'complete', filePath: undefined });
     } catch (error) {
