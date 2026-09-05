@@ -28,6 +28,7 @@ import { onRendererError } from './reportErrors';
 import { useStrudel } from './useStrudel';
 import { normalizeBeatName } from '../shared/beatName';
 import { DEFAULT_BEAT_SORT, moveBeat, sortBeats, type BeatSortMode, type BeatSummary } from '../shared/beatSorting';
+import { DEFAULT_SETTINGS, type BeatSwitchTiming } from '../shared/settings';
 import { nextCloneName } from '../shared/cloneName';
 import { handoffClonedBeat } from '../shared/cloneHandoff';
 import { STARTER_BEAT } from '../shared/starterBeat';
@@ -99,6 +100,7 @@ export function App() {
   // each device's own faders. Session-scoped like the tempo map — switching
   // beats must not close the mixer.
   const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
+  const [beatSwitchTiming, setBeatSwitchTiming] = useState<BeatSwitchTiming>(DEFAULT_SETTINGS.beatSwitchTiming as BeatSwitchTiming);
 
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
@@ -544,12 +546,25 @@ export function App() {
             return;
           }
           activate(name, content);
-          // Re-evaluating swaps the pattern in place. The scheduler keeps counting,
-          // so the new beat lands on the next cycle boundary and the bar holds.
-          reevaluate();
+          // Scheduling: respect the latency setting against the live transport.
+          if (beatSwitchTiming === 'manual') {
+            // Manual: user must trigger evaluation explicitly; do not auto-reevaluate.
+            return;
+          }
+          if (beatSwitchTiming === 'immediate') {
+            reevaluate();
+            return;
+          }
+          // Next half-bar / next bar: delay adoption until the next cycle boundary.
+          const delayMs = beatSwitchTiming === 'next-half-bar' ? 250 : 500; // scaled by typical cycle
+          const timer = window.setTimeout(() => {
+            reevaluate();
+          }, delayMs);
+          // Keep timer reference for cleanup if activation is superseded.
+          (window as unknown as Record<string, unknown>).__strudelLatencyTimer = timer;
         }),
       ),
-    [activate, attempt, captureCurrentDraft, queueSessionOperation, reevaluate],
+    [activate, attempt, captureCurrentDraft, queueSessionOperation, reevaluate, beatSwitchTiming],
   );
 
   /** Clone a beat and move to the copy, without interrupting the sound. */
@@ -1046,6 +1061,8 @@ export function App() {
             onSortChange={changeSort}
             onReorder={reorder}
             onDismissError={() => setBeatError(undefined)}
+            latency={beatSwitchTiming}
+            onLatencyChange={(v) => setBeatSwitchTiming(v as BeatSwitchTiming)}
           />
         ) : (
           <div />

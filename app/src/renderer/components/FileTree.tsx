@@ -42,6 +42,8 @@ type Props = {
   onSortChange: (mode: BeatSortMode) => void;
   onReorder: (from: string, to: string, position?: 'before' | 'after') => void;
   onDismissError: () => void;
+  latency?: string;
+  onLatencyChange?: (value: string) => void;
 };
 
 /**
@@ -59,6 +61,8 @@ export function FileTree({
   error,
   sortMode = DEFAULT_BEAT_SORT,
   manualOrder = [],
+  latency = 'next-bar',
+  onLatencyChange,
   onOpen,
   onCreate,
   onRename,
@@ -240,7 +244,11 @@ export function FileTree({
           </label>
           <label className="audio-latency" aria-label="Audio switch latency">
             <span>latency</span>
-            <select aria-label="Audio switch latency" defaultValue="next-bar">
+            <select
+              aria-label="Audio switch latency"
+              value={latency}
+              onChange={(e) => onLatencyChange?.(e.target.value)}
+            >
               <option value="immediate">Immediate</option>
               <option value="next-half-bar">Next half-bar</option>
               <option value="next-bar">Next bar</option>
