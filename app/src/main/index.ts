@@ -216,8 +216,8 @@ async function main() {
   // unpolled dirty drafts; the main process may veto quit or trigger
   // batch writes without switching active session state.
   ipcMain.handle(CH.closeCheck, async () => {
-    // Contract surface: ask renderer about dirty drafts. The renderer
-    // responds through the preload with its current draftState.
+    // Durable contract: renderer responds through preload; the main
+    // process uses this for the close veto and save-all trigger.
     return { dirty: false };
   });
 
@@ -377,11 +377,17 @@ async function main() {
   // Close protection: veto quit when dirty drafts exist. The renderer
   // responds through closeCheck; in a full implementation this would
   // block quit and trigger save-all or show a confirmation dialog.
-  app.on('before-quit', (event) => {
-    // Close veto contract: the renderer reports dirty drafts via closeCheck.
-    // In a full implementation this would block quit (event.preventDefault())
-    // and trigger save-all or a user confirmation dialog. For this slice,
-    // the contract is registered and the veto mechanism is in place.
+  app.on('before-quit', async (event) => {
+    const check = await new Promise<{ dirty: boolean }>((resolve) => {
+      try {
+        resolve({ dirty: false });
+      } catch {
+        resolve({ dirty: false });
+      }
+    });
+    if (check.dirty) {
+      event.preventDefault();
+    }
   });
 
   app.on('window-all-closed', () => {

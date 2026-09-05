@@ -1,5 +1,5 @@
 import { desktop } from './desktop';
-import { hasDirtyDrafts, dirtyBeats, getDraftSession, isBeatDirty, type DraftState } from './draftState';
+import { hasDirtyDrafts, dirtyBeats, type DraftState } from './draftState';
 
 export type SaveAllResult = Record<string, { saved: boolean; conflict?: boolean; error?: string }>;
 
