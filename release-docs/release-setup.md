@@ -48,7 +48,7 @@ uploaded.
 ## Dry-run vs public release
 
 - **Dry-run** (`workflow_dispatch` with `dry_run: true`): builds unsigned `.dmg`/`.zip` artifacts without any Apple secrets. Use for maintainer testing of packaging only. Clearly separate from the publishing path.
-- **Public release** (`push` to `v*` tag or `workflow_dispatch` without `dry_run`): requires all secrets above. The workflow verifies presence before building, generates `release/electron-builder.release.yml` from `DEVELOPER_ID_APP_IDENTITY`, and calls `electron-builder` with the release config.
+- **Public release** (`push` to `v*` tag or `workflow_dispatch` without `dry_run`): requires all secrets above. The workflow verifies presence before building, generates `release/electron-builder.release.generated.yml` (from `release/electron-builder.release.yml` template) using `DEVELOPER_ID_APP_IDENTITY`, and calls `electron-builder` with that generated config.
 
 ## Gatekeeper expectations
 
