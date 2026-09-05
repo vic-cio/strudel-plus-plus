@@ -9,7 +9,7 @@ This project builds `arm64` only (`mac-arm64`). The current native prebuilds for
 `node-pty` 1.1.0 and `@julusian/midi` 3.8.1 are tested on Apple Silicon. A
 future `x64` or universal (`universal`) artifact requires confirming both
 prebuilds and the `npmRebuild: false` strategy work on Intel, which is not
-verified today. Leave a follow-up note (`release-release-docs/release-setup.md`) rather than
+verified today. Leave a follow-up note (`release-docs/release-setup.md`) rather than
 pretending universal support exists.
 
 ## Artifact formats
