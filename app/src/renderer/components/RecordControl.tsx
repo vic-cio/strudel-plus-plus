@@ -2,20 +2,24 @@ import { useState, useCallback, useRef } from 'react';
 import { startRecording, type RecordingCapture } from '../recording';
 import { recordingIntent, type RecordingMode, recordingFailureMessage } from '../../shared/recording';
 
-export type RecordEvent = {
-  kind: 'start';
-  mode: RecordingMode;
-  source: string;
-} | {
-  kind: 'stop';
-  capture: RecordingCapture;
-} | {
-  kind: 'complete';
-  filePath: string | undefined;
-} | {
-  kind: 'fail';
-  message: string;
-};
+export type RecordEvent =
+  | {
+      kind: 'start';
+      mode: RecordingMode;
+      source: string;
+    }
+  | {
+      kind: 'stop';
+      capture: RecordingCapture;
+    }
+  | {
+      kind: 'complete';
+      filePath: string | undefined;
+    }
+  | {
+      kind: 'fail';
+      message: string;
+    };
 
 export type RecordProps = {
   mode: RecordingMode;

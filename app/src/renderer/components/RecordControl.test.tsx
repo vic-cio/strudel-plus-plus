@@ -23,7 +23,9 @@ describe('RecordControl', () => {
   it('emits start, stop, complete, and fail events for wiring', async () => {
     render(<RecordControl mode="audio" source="beat" masterAvailable={true} onEvent={onEvent} />);
     fireEvent.click(screen.getAllByText('● record audio')[0]);
-    await waitFor(() => expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'start', mode: 'audio' })));
+    await waitFor(() =>
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'start', mode: 'audio' })),
+    );
     fireEvent.click(screen.getByRole('button', { name: /stop/i }));
     await waitFor(() => expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'stop' })));
   });
