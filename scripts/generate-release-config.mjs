@@ -11,5 +11,6 @@ if (!identity) {
 const templatePath = resolve('release/electron-builder.release.yml');
 let template = readFileSync(templatePath, 'utf8');
 const output = template.replace('DEVELOPER_ID_APP_IDENTITY_PLACEHOLDER', identity);
-writeFileSync(templatePath, output, 'utf8');
-console.log(`Release config generated with identity: ${identity}`);
+const outputPath = resolve('release/electron-builder.release.generated.yml');
+writeFileSync(outputPath, output, 'utf8');
+console.log(`Release config generated at: ${outputPath}`);
