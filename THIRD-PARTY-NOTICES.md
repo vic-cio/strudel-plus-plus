@@ -50,6 +50,13 @@ packages are pinned in `app/package.json` and `pnpm-lock.yaml`; their package
 licenses remain in their installed package metadata when a dependency is
 redistributed.
 
+## Release artifacts
+
+Public releases (see `.github/workflows/release.yml`) distribute `.dmg` and `.zip`
+artifacts built for `arm64` only. The packaged application includes the wrapper
+source (`out/`), the pinned published `@strudel/*` dependencies from npm, the
+pinned unpublished upstream modules fetched by `scripts/fetch-upstream-artifacts.mjs` (verified by SHA-256 and stored in `app/.external/strudel/`), native helper prebuilds (`node-pty`, `@julusian/midi`), and the inlined default session/harness content. Corresponding source for all upstream components is preserved through the pinned commit (`UPSTREAM-SOURCES.md`) and the package lockfile; the full upstream monorepo is not redistributed.
+
 ## Remote sample banks
 
 The app does not vendor audio samples. `app/src/renderer/prebake.mjs` loads

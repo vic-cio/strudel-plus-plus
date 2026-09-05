@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry-run (unsigned build, no secrets required)'
+        type: boolean
+        default: false
+      tag:
+        description: 'Tag for release (optional)'
+        type: string
+        required: false
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: pnpm install --frozen-lockfile
+
+      - name: Verify wrapper boundary
+        run: pnpm verify:boundary
+
+      - name: Build unpacked app
+        run: pnpm build
+
+      - name: Check required release secrets
+        if: github.event_name == 'push' || github.event.inputs.dry_run == false
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DEVELOPER_ID_APP_IDENTITY: ${{ secrets.DEVELOPER_ID_APP_IDENTITY }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          MISSING=""
+          [ -z "$APPLE_ID" ] && MISSING="$MISSING APPLE_ID"
+          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && MISSING="$MISSING APPLE_APP_SPECIFIC_PASSWORD"
+          [ -z "$APPLE_TEAM_ID" ] && MISSING="$MISSING APPLE_TEAM_ID"
+          [ -z "$DEVELOPER_ID_APP_IDENTITY" ] && MISSING="$MISSING DEVELOPER_ID_APP_IDENTITY"
+          [ -n "$MISSING" ] && { echo "Release secrets missing:$MISSING"; exit 1; }
+          echo "All release secrets present."
+
+      - name: Generate release config
+        if: github.event_name == 'push' || github.event.inputs.dry_run == false
+        env:
+          DEVELOPER_ID_APP_IDENTITY: ${{ secrets.DEVELOPER_ID_APP_IDENTITY }}
+        run: node scripts/generate-release-config.mjs
+
+      - name: Build release artifacts (signed + notarized)
+        if: github.event_name == 'push' || github.event.inputs.dry_run == false
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DEVELOPER_ID_APP_IDENTITY: ${{ secrets.DEVELOPER_ID_APP_IDENTITY }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          # Use the release config that includes identity + dmg/zip targets.
+          pnpm --dir app prepare:external
+          pnpm --dir app electron-vite build
+          npx electron-builder --mac dmg zip --arm64 -c release/electron-builder.release.yml --projectDir app
+
+      - name: Dry-run unsigned build
+        if: github.event.inputs.dry_run == true
+        run: pnpm --dir app release:dry-run
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: strudel-plus-plus-release
+          path: app/release/*
