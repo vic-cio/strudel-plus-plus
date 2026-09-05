@@ -31,6 +31,7 @@ export const CH = {
   midiSend: 'midi:send',
   midiPorts: 'midi:ports',
   recordingSave: 'recording:save',
+  closeCheck: 'close:check',
 } as const;
 
 /**
