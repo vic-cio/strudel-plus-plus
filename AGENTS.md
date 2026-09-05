@@ -52,6 +52,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - The canonical default root and legacy-root migration live in `app/src/main/sessionsRoot.ts`; the migration is independently exercised by `sessionsRoot.test.ts`.
 
 ## Bundled library vs default session boundary
+
 - The bundled read-only library (`bundledLibrary.ts`) must use its own session label (`bundled library`) and never share `DEFAULT_SESSION_NAME` (`we cook`), so the editable default session (`seedDefaultSession`) remains clearly separate in the picker (`SessionPicker`). Pinned by `bundledLibrary.test.ts`.
 - The sidebar shortcut legend (`.tree-shortcuts` in `FileTree.tsx`) must stay removed; that header space is reserved for the audio-switch-latency dropdown (planned). Keyboard shortcuts (`⌘N`/`F2`/`⌘⌫`) remain available without being rendered as sidebar text.
 
