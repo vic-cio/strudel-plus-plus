@@ -1106,6 +1106,7 @@ export function App() {
         cps={cps}
         harness={harness}
         error={state.error?.message}
+        recordingMode="audio"
       />
     </div>
   );
