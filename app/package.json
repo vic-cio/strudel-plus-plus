@@ -12,7 +12,8 @@
     "postinstall": "node ../scripts/ensure-pty-helper.mjs",
     "dev": "npm run prepare:external && electron-vite dev",
     "build": "npm run prepare:external && electron-vite build && electron-builder --mac --dir && npm run verify:identity",
-    "dist": "npm run prepare:external && electron-vite build && electron-builder --mac && npm run verify:identity",
+    "dist": "npm run prepare:external && electron-vite build && electron-builder --mac dmg zip --arm64 && npm run verify:identity",
+    "release:dry-run": "npm run prepare:external && electron-vite build && electron-builder --mac dmg zip --arm64 --dir && npm run verify:identity",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "verify:identity": "node scripts/verify-native-identity.mjs"
@@ -78,6 +79,8 @@
       "category": "public.app-category.music",
       "target": "dir",
       "executableName": "strudel++",
+      "notarize": true,
+      "hardenedRuntime": true,
       "extendInfo": {
         "CFBundleDisplayName": "strudel++",
         "CFBundleName": "strudel++"

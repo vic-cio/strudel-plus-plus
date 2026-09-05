@@ -48,6 +48,19 @@ Beat sessions are user data and are intentionally not part of this repository.
 See [`app/README.md`](app/README.md) for session, harness, tempo, MIDI, OSC, and
 debugging details.
 
+## Release and distribution
+
+Public releases use `.github/workflows/release.yml`. It builds `.dmg` and `.zip`
+artifacts (`arm64`), signs with `Developer ID Application`, and notarizes
+through Apple. Required secrets (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`,
+`APPLE_TEAM_ID`, `DEVELOPER_ID_APP_IDENTITY`) must be configured before the
+workflow runs; missing secrets fail clearly rather than shipping unsigned
+artifacts. A separate unsigned dry-run (`dry_run: true`) is available for
+maintainer testing.
+
+See [`release-docs/release-setup.md`](release-docs/release-setup.md) for Apple Developer setup,
+secret names, architecture notes, and Gatekeeper expectations.
+
 ## Licensing and provenance
 
 This project is licensed under [AGPL-3.0-or-later](LICENSE). The wrapper is a
