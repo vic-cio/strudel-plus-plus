@@ -555,12 +555,18 @@ export function App() {
             reevaluate();
             return;
           }
-          // Next half-bar / next bar: delay adoption until the next cycle boundary.
-          const delayMs = beatSwitchTiming === 'next-half-bar' ? 250 : 500; // scaled by typical cycle
+          // Next half-bar / next bar: delay adoption against the live transport
+          // cycle (based on current cps) so the switch lands on a boundary.
+          const cycleMs = cps > 0 ? 1000 / cps : 500;
+          const delayMs = beatSwitchTiming === 'next-half-bar' ? Math.round(cycleMs / 2) : Math.round(cycleMs);
           const timer = window.setTimeout(() => {
             reevaluate();
           }, delayMs);
-          // Keep timer reference for cleanup if activation is superseded.
+          // Clean up a superseded timer so only the latest adoption fires.
+          const prevTimer = (window as unknown as Record<string, unknown>).__strudelLatencyTimer as number | undefined;
+          if (prevTimer !== undefined) {
+            window.clearTimeout(prevTimer);
+          }
           (window as unknown as Record<string, unknown>).__strudelLatencyTimer = timer;
         }),
       ),
