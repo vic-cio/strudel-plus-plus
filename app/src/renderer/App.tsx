@@ -100,7 +100,9 @@ export function App() {
   // each device's own faders. Session-scoped like the tempo map — switching
   // beats must not close the mixer.
   const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
-  const [beatSwitchTiming, setBeatSwitchTiming] = useState<BeatSwitchTiming>(DEFAULT_SETTINGS.beatSwitchTiming as BeatSwitchTiming);
+  const [beatSwitchTiming, setBeatSwitchTiming] = useState<BeatSwitchTiming>(
+    DEFAULT_SETTINGS.beatSwitchTiming as BeatSwitchTiming,
+  );
 
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);

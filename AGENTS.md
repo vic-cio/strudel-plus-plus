@@ -56,7 +56,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - The read-only bundled beat library (`bundledLibrary.ts`) and its picker strip have been removed. Only user-editable sessions plus the editable default session `we cook` remain in the session picker.
 - Any future library must be a separate wiki-like sound-sample reference (not a session or beat collection) where users learn, preview, and use available samples. It is not implemented in this slice.
-- The sidebar shortcut legend (`.tree-shortcuts` in `FileTree.tsx`) must stay removed; that header space is reserved for the audio-switch-latency dropdown (planned). Keyboard shortcuts (`⌘N`/`F2`/`⌘⌫`) remain available without being rendered as sidebar text.
+- The sidebar shortcut legend (`.tree-shortcuts` in `FileTree.tsx`) stays removed; that header space is reserved and now holds the wired audio-switch-latency dropdown (`latency={beatSwitchTiming}` with `onLatencyChange`). Keyboard shortcuts (`⌘N`/`F2`/`⌘⌫`) remain available without being rendered as sidebar text.
 
 ## Beat watcher ignore rule
 

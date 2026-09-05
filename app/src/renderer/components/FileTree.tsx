@@ -8,9 +8,7 @@ import {
 } from '../../shared/beatSorting';
 
 export type FileTreeDraftAction =
-  | { kind: 'create' }
-  | { kind: 'rename'; from: string }
-  | { kind: 'confirm-delete'; name: string };
+  { kind: 'create' } | { kind: 'rename'; from: string } | { kind: 'confirm-delete'; name: string };
 export type FileTreeDraft =
   | { kind: 'create'; value: string }
   | { kind: 'rename'; from: string; value: string }

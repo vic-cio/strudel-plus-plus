@@ -24,7 +24,10 @@ describe('persistence and migration', () => {
 describe('latency scheduling contract', () => {
   it('accepts all four latency modes', () => {
     const modes: Array<'immediate' | 'next-bar' | 'next-half-bar' | 'manual'> = [
-      'immediate', 'next-bar', 'next-half-bar', 'manual',
+      'immediate',
+      'next-bar',
+      'next-half-bar',
+      'manual',
     ];
     for (const mode of modes) {
       const s = validateSettings({ version: 1, beatSwitchTiming: mode });
