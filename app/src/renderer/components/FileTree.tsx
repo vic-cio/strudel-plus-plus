@@ -238,7 +238,6 @@ export function FileTree({
               <option value="manual">Manual</option>
             </select>
           </label>
-          <span className="tree-shortcuts">⌘N new · F2 rename · ⌘⌫ delete</span>
         </span>
       </header>
       <div className="pane-body">
