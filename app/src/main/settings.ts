@@ -13,7 +13,8 @@ export function validateSettings(raw: unknown): Settings {
     sessionsRoot: typeof r.sessionsRoot === 'string' ? r.sessionsRoot : undefined,
     beatSwitchTiming: timing,
     recordConfig: validateRecordConfig(r.recordConfig),
-    closeBehavior: (typeof r.closeBehavior === 'string' && (r.closeBehavior === 'ask' || r.closeBehavior === 'auto-save' || r.closeBehavior === 'discard')
+    closeBehavior: (typeof r.closeBehavior === 'string' &&
+    (r.closeBehavior === 'ask' || r.closeBehavior === 'auto-save' || r.closeBehavior === 'discard')
       ? (r.closeBehavior as Settings['closeBehavior'])
       : DEFAULT_SETTINGS.closeBehavior) as Settings['closeBehavior'],
   };
