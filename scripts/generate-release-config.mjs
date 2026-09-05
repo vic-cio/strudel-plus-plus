@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const identity = process.env.DEVELOPER_ID_APP_IDENTITY;
@@ -8,9 +8,14 @@ if (!identity) {
   process.exit(1);
 }
 
-const templatePath = resolve('release/electron-builder.release.yml');
-let template = readFileSync(templatePath, 'utf8');
-const output = template.replace('DEVELOPER_ID_APP_IDENTITY_PLACEHOLDER', identity);
 const outputPath = resolve('release/electron-builder.release.generated.yml');
-writeFileSync(outputPath, output, 'utf8');
+const config = `mac:
+  identity: "${identity}"
+  notarize: true
+  hardenedRuntime: true
+  target:
+    - dmg
+    - zip
+`;
+writeFileSync(outputPath, config, 'utf8');
 console.log(`Release config generated at: ${outputPath}`);
