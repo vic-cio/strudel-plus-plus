@@ -238,6 +238,15 @@ export function FileTree({
               <option value="manual">Manual</option>
             </select>
           </label>
+          <label className="audio-latency" aria-label="Audio switch latency">
+            <span>latency</span>
+            <select aria-label="Audio switch latency" defaultValue="next-bar">
+              <option value="immediate">Immediate</option>
+              <option value="next-half-bar">Next half-bar</option>
+              <option value="next-bar">Next bar</option>
+              <option value="manual">Manual</option>
+            </select>
+          </label>
         </span>
       </header>
       <div className="pane-body">
