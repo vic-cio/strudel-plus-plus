@@ -28,6 +28,16 @@ export function buildTransaction(
   value: number,
   range: SyntaxRange,
 ): FunctionTransaction {
+  const lines = documentText.split('\n');
+  const fromLine = rangeToLine(lines, range.from);
+  const toLine = rangeToLine(lines, range.to);
+  if (fromLine !== toLine) {
+    throw new Error('Range must be on a single line');
+  }
+  const lineText = lines[fromLine] ?? '';
+  if (range.from.ch < 0 || range.to.ch < 0 || range.from.ch > lineText.length || range.to.ch > lineText.length) {
+    throw new Error('Range out of line bounds');
+  }
   return {
     range,
     replacement: String(value),
@@ -37,18 +47,20 @@ export function buildTransaction(
 
 export function applyTransaction(documentText: string, tx: FunctionTransaction): string {
   const lines = documentText.split('\n');
-  const fromLine = rangeToLine(lines, tx.range.from);
-  const toLine = rangeToLine(lines, tx.range.to);
-  // For simplicity: single-line replacement within this fixture scope.
-  if (fromLine === toLine) {
-    const lineText = lines[fromLine] ?? '';
-    const before = lineText.slice(0, tx.range.from.ch);
-    const after = lineText.slice(tx.range.to.ch);
-    lines[fromLine] = before + tx.replacement + after;
+  const fromLineNum = rangeToLine(lines, tx.range.from);
+  const toLineNum = rangeToLine(lines, tx.range.to);
+  if (fromLineNum !== toLineNum) {
+    throw new Error('Multi-line replacements are not supported');
   }
+  const lineText = lines[fromLineNum] ?? '';
+  const clampedFromCh = Math.min(Math.max(0, tx.range.from.ch), lineText.length);
+  const clampedToCh = Math.min(Math.max(0, tx.range.to.ch), lineText.length);
+  const before = lineText.slice(0, clampedFromCh);
+  const after = lineText.slice(clampedToCh);
+  lines[fromLineNum] = before + tx.replacement + after;
   return lines.join('\n');
 }
 
 function rangeToLine(lines: string[], pos: { line: number; ch: number }): number {
-  return Math.min(pos.line, lines.length - 1);
+  return Math.min(Math.max(0, pos.line), lines.length - 1);
 }

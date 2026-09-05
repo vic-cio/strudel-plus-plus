@@ -76,7 +76,7 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
       return { ...state, pluginState: { ...state.pluginState, [action.instanceId]: action.state } };
     case 'SET_GEOMETRY':
     case 'MOVE_PANEL': {
-      // Geometry handled separately; dock reducer ignores geometry actions.
+      // Geometry handled separately; dock reducer ignores geometry actions (caller merges).
       return state;
     }
     case 'MIGRATE_DEFINITION_KEYED': {
@@ -86,7 +86,7 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
           nextPluginState[newId] = state.pluginState[oldKey];
         }
       }
-      return { ...state, pluginState: { ...nextPluginState, ...state.pluginState } };
+      return { ...state, pluginState: nextPluginState };
     }
     default:
       return state;
