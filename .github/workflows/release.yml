@@ -69,7 +69,7 @@ jobs:
           # Use the release config that includes identity + dmg/zip targets.
           pnpm --dir app prepare:external
           pnpm --dir app electron-vite build
-          npx electron-builder --mac dmg zip --arm64 -c release/electron-builder.release.yml --projectDir app
+          npx electron-builder --mac dmg zip --arm64 -c release/electron-builder.release.generated.yml --projectDir app
 
       - name: Dry-run unsigned build
         if: github.event.inputs.dry_run == true

@@ -1,0 +1,21 @@
+{
+  "findings": [
+    {
+      "id": "workflow-uses-template-not-generated",
+      "severity": "error",
+      "file": ".github/workflows/release.yml",
+      "line": 72,
+      "description": "The build command uses -c release/electron-builder.release.yml (the un-substituted template with DEVELOPER_ID_APP_IDENTITY_PLACEHOLDER) instead of release/electron-builder.release.generated.yml produced by scripts/generate-release-config.mjs. The identity substitution is never applied during the actual electron-builder invocation.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    }
+  ],
+  "tested": [
+    "scripts/generate-release-config.mjs writes .generated.yml",
+    "release.yml line 72"
+  ],
+  "testing_summary": "Verified diff, script output path, and workflow command; no behavioral tests run per review-phase rules.",
+  "risk_level": "high",
+  "risk_rationale": "The release workflow generates a substituted config but never consumes it, so the signed/notarized build would use the placeholder identity and fail; this is a concrete reachable failure in the primary release path.",
+  "risk_scope": "source-or-external"
+}
