@@ -51,6 +51,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - The one-time default seed writes `.default-session-seeded`; deleting `we cook` through the store writes `.default-session-deleted`, so deliberate deletion does not resurrect it on the next `list()`. Legacy roots without either marker remain eligible for their first seed or deletion tombstone. Session deletion is exposed through `sessions:remove` but the main-process handler refuses the active session (`app/src/main/index.ts`).
 - The canonical default root and legacy-root migration live in `app/src/main/sessionsRoot.ts`; the migration is independently exercised by `sessionsRoot.test.ts`.
 
+## Bundled library vs default session boundary
+
+- The bundled read-only library (`bundledLibrary.ts`) must use its own session label (`bundled library`) and never share `DEFAULT_SESSION_NAME` (`we cook`), so the editable default session (`seedDefaultSession`) remains clearly separate in the picker (`SessionPicker`). Pinned by `bundledLibrary.test.ts`.
+- The sidebar shortcut legend (`.tree-shortcuts` in `FileTree.tsx`) must stay removed; that header space is reserved for the audio-switch-latency dropdown (planned). Keyboard shortcuts (`⌘N`/`F2`/`⌘⌫`) remain available without being rendered as sidebar text.
+
 ## Beat watcher ignore rule
 
 `watchBeats` skips dot-entries _relative to the watched root only_ (`ignored` in `app/src/main/watcher.ts`). Filtering on absolute path parts would silently deafen any sessions root under a dot-directory (e.g. worktrees like `.treehouse`), with no error anywhere. `watcher.test.ts` pins both sides of this rule.

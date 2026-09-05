@@ -3,10 +3,11 @@ import { createBundledLibrary } from './bundledLibrary';
 import { DEFAULT_SESSION_BEATS, DEFAULT_SESSION_NAME } from './defaultSession';
 
 describe('bundled library', () => {
-  it('lists every bundled beat under the bundled session name', async () => {
+  it('lists every bundled beat under a session name distinct from the editable default session', async () => {
     const entries = await createBundledLibrary().list();
     expect(entries.map((entry) => entry.name).sort()).toEqual(Object.keys(DEFAULT_SESSION_BEATS).sort());
-    expect(entries.every((entry) => entry.session === DEFAULT_SESSION_NAME)).toBe(true);
+    expect(entries.every((entry) => entry.session !== DEFAULT_SESSION_NAME)).toBe(true);
+    expect(entries.every((entry) => entry.session === 'bundled library')).toBe(true);
   });
 
   it('reads back the exact bundled content for every listed beat', async () => {
