@@ -972,8 +972,6 @@ export function App() {
     })();
   }, []);
 
-  const readLibraryBeat = useCallback((name: string) => Promise.reject(new Error('Library removed')), []);
-
   useEffect(() => {
     // FileTree is unmounted when the sidebar is collapsed. Its naming/delete
     // draft therefore belongs in App, and stale targets must be retired when
@@ -1060,8 +1058,6 @@ export function App() {
         onCancel={session ? cancelSessionPicker : undefined}
         rootStatus={rootStatus}
         onChooseRoot={session ? undefined : chooseRoot}
-        library={[]}
-        readLibraryBeat={readLibraryBeat}
       />
     );
   }
