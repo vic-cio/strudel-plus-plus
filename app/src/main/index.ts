@@ -13,7 +13,6 @@ import { resolveSessionsRoot } from './sessionsRoot';
 import { createPtyHost } from './pty';
 import { watchBeats } from './watcher';
 import { createSessionRootSetting } from './sessionRootPointer';
-import { createBundledLibrary } from './bundledLibrary';
 import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
@@ -93,7 +92,9 @@ async function main() {
   // The pointer names the folder; the app never moves what lives there.
   let root = configuredRoot.state === 'ok' ? configuredRoot.path : await resolveSessionsRoot();
   let sessions = createSessionStore(root);
-  const library = createBundledLibrary();
+  // Library removed: future sample reference will be a separate wiki,
+  // not a session/beat collection. The editable default session (`we cook`)
+  // remains the only bundled session.
 
   // Everything below hangs off which session is open: the beat store is rooted
   // in it, the watcher follows it, and the harness runs inside it so the agent
@@ -349,8 +350,10 @@ async function main() {
   ipcMain.handle(CH.sessionsOpen, (_event, name: string) => queueSessionTransition(() => openSession(name)));
   ipcMain.handle(CH.sessionsState, (_event, name: string) => sessions.getState(name));
   ipcMain.handle(CH.sessionsSetState, (_event, name: string, state: SessionState) => sessions.setState(name, state));
-  ipcMain.handle(CH.libraryList, () => library.list());
-  ipcMain.handle(CH.libraryRead, (_event, name: string) => library.read(name));
+  ipcMain.handle(CH.libraryList, () => Promise.resolve([]));
+  ipcMain.handle(CH.libraryRead, () =>
+    Promise.reject(new Error('Library removed: future sample reference is a separate wiki')),
+  );
 
   let server: Server | undefined;
   const devServer = process.env.ELECTRON_RENDERER_URL;
