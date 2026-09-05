@@ -1,0 +1,63 @@
+{
+  "findings": [
+    {
+      "id": "playback-source-on-failure",
+      "severity": "warning",
+      "file": "app/src/renderer/useStrudel.ts",
+      "line": 184,
+      "description": "evaluate() sets playbackSource unconditionally (line 184) before confirming evaluate() succeeds. If evaluate() throws, playbackSource still claims the source beat is playing, contradicting the intended contract that a failed evaluation does not claim the beat is audible.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "close-coordinator-unused-params",
+      "severity": "info",
+      "file": "app/src/renderer/closeCoordinator.ts",
+      "line": 18,
+      "description": "sessionName and openBeat parameters are accepted but never read; the loop writes all dirty drafts across all sessions without filtering by session or checking conflicts/saved state.",
+      "action": "no-op",
+      "review_scope": "source"
+    },
+    {
+      "id": "close-coordinator-conflict-ignored",
+      "severity": "warning",
+      "file": "app/src/renderer/closeCoordinator.ts",
+      "line": 25,
+      "description": "saveAllSessions writes sessionDrafts.drafts[beat] without checking sessionDrafts.conflicts or comparing against saved content, so it may overwrite conflicts or unmodified drafts as new saves.",
+      "action": "ask-user",
+      "review_scope": "source"
+    },
+    {
+      "id": "close-behavior-unvalidated",
+      "severity": "warning",
+      "file": "app/src/main/settings.ts",
+      "line": 30,
+      "description": "closeBehavior casts r.closeBehavior directly to the union without validating it belongs to 'ask' | 'auto-save' | 'discard'; corrupt strings pass through silently.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "empty-playback-test",
+      "severity": "info",
+      "file": "app/src/renderer/playbackSource.test.ts",
+      "line": 7,
+      "description": "Tests are stubs (expect(true).toBe(true)) and do not exercise playback source state transitions.",
+      "action": "no-op",
+      "review_scope": "source"
+    },
+    {
+      "id": "extra-save-path",
+      "severity": "warning",
+      "file": "app/src/renderer/closeCoordinator.ts",
+      "line": 1,
+      "description": "closeCoordinator introduces a second cross-session save surface that duplicates desktop.beats.write logic but ignores conflicts/saved state. Not required by stated intent; recommend removing unless multi-session save-all is an explicit required feature.",
+      "action": "ask-user",
+      "review_scope": "source"
+    }
+  ],
+  "tested": ["app/src/renderer/useStrudel.ts", "app/src/renderer/closeCoordinator.ts", "app/src/main/settings.ts", "app/src/shared/settings.ts"],
+  "testing_summary": "Inspected diff and source files manually; did not execute tests (per review-phase rules). Confirmed playbackSource set occurs before success confirmation, closeCoordinator ignores conflicts/unused params, settings closeBehavior lacks validation.",
+  "risk_level": "medium",
+  "risk_rationale": "Playback source tracking can falsely claim success on failure; closeCoordinator introduces parallel save logic without conflict/saved-state guards; settings allow corrupt closeBehavior; no authorization/privacy boundary issues found.",
+  "risk_scope": "source-or-external"
+}

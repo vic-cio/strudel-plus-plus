@@ -182,10 +182,14 @@ export function useStrudel(onCodeChange: (code: string) => void) {
 
   const evaluate = useCallback(
     (sourceBeat?: string) => {
-      void editorRef.current?.evaluate().catch(report);
-      if (sourceBeat !== undefined) {
-        setPlaybackSource(sourceBeat);
-      }
+      void editorRef.current?.evaluate().then(
+        () => {
+          if (sourceBeat !== undefined) {
+            setPlaybackSource(sourceBeat);
+          }
+        },
+        (err: unknown) => report(err),
+      );
     },
     [report],
   );
