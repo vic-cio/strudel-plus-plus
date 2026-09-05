@@ -34,8 +34,20 @@ import { STARTER_BEAT } from '../shared/starterBeat';
 import { resolveDiskChange } from '../shared/sync';
 import { clampCps, hasCodedTempo } from '../shared/tempo';
 import { normalizeDockState, type DockState } from '../shared/dockState';
-import type { BeatChange } from '../shared/ipc';
+import type { BeatChange, SessionRootStatus } from '../shared/ipc';
 import type { HarnessDef } from '../shared/harness';
+import {
+  DEFAULT_RECORDING_SETTINGS,
+  RECORDING_MODES,
+  recordingFailureMessage,
+  recordingSource,
+  type RecordingMode,
+} from '../shared/recording';
+import { startRecording, type RecordingCapture } from './recording';
+
+function isRecordingMode(value: string | null): value is RecordingMode {
+  return RECORDING_MODES.some((item) => item.mode === value);
+}
 
 /** Pane widths survive a restart. A layout you set once should stay set. */
 function usePaneWidth(key: string, fallback: number) {
@@ -73,6 +85,7 @@ function sameOrder(left: string[], right: string[]): boolean {
 
 export function App() {
   const [root, setRoot] = useState('');
+  const [rootStatus, setRootStatus] = useState<SessionRootStatus>();
   const [beats, setBeats] = useState<BeatSummary[]>([]);
   const [beatSort, setBeatSort] = useState<BeatSortMode>(DEFAULT_BEAT_SORT);
   const [manualBeatOrder, setManualBeatOrder] = useState<string[]>([]);
@@ -99,6 +112,17 @@ export function App() {
   // each device's own faders. Session-scoped like the tempo map — switching
   // beats must not close the mixer.
   const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
+  const [recordingMode, setRecordingMode] = useState<RecordingMode>(() => {
+    try {
+      const value = localStorage.getItem('recording.mode');
+      return isRecordingMode(value) ? value : DEFAULT_RECORDING_SETTINGS.mode;
+    } catch {
+      return DEFAULT_RECORDING_SETTINGS.mode;
+    }
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [savingTake, setSavingTake] = useState(false);
 
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
@@ -106,6 +130,9 @@ export function App() {
   const pendingRenameRef = useRef<{ from: string; to: string } | undefined>(undefined);
   const beatActivationRef = useRef(0);
   const diskChangeVersionRef = useRef(new Map<string, number>());
+  const lastSuccessfulBufferRef = useRef<string | undefined>(undefined);
+  const recordingRef = useRef<RecordingCapture | undefined>(undefined);
+  const savingTakeRef = useRef(false);
   const beatsRef = useRef<BeatSummary[]>([]);
   const beatSortRef = useRef<BeatSortMode>(DEFAULT_BEAT_SORT);
   const manualBeatOrderRef = useRef<string[]>([]);
@@ -166,20 +193,59 @@ export function App() {
     [updateDraftState],
   );
 
-  const {
-    containerRef,
-    state,
-    playbackSource,
-    setPlaybackSource,
-    setCode,
-    getCode,
-    clearError,
-    toggle,
-    cps,
-    changeCps,
-    releaseCps,
-    reevaluate,
-  } = useStrudel(onCodeChange);
+  const onSuccessfulEval = useCallback((code: string) => {
+    lastSuccessfulBufferRef.current = code;
+  }, []);
+  const { containerRef, state, setCode, getCode, clearError, toggle, cps, changeCps, releaseCps, reevaluate } =
+    useStrudel(onCodeChange, onSuccessfulEval);
+
+  const changeRecordingMode = useCallback((mode: RecordingMode) => {
+    setRecordingMode(mode);
+    try {
+      localStorage.setItem('recording.mode', mode);
+    } catch {
+      // Settings remain usable for this run when storage is unavailable.
+    }
+  }, []);
+
+  const record = useCallback(async () => {
+    if (savingTakeRef.current) {
+      return;
+    }
+    const capture = recordingRef.current;
+    if (capture) {
+      recordingRef.current = undefined;
+      savingTakeRef.current = true;
+      setSavingTake(true);
+      setRecording(false);
+      try {
+        const blob = await capture.stop();
+        await desktop.recording.save(
+          new Uint8Array(await blob.arrayBuffer()),
+          `${open?.replace(/\.js$/, '') ?? 'take'}.${capture.extension}`,
+        );
+      } catch (error) {
+        setBeatError(recordingFailureMessage(error));
+      } finally {
+        savingTakeRef.current = false;
+        setSavingTake(false);
+      }
+      return;
+    }
+    const source = recordingSource(lastSuccessfulBufferRef.current);
+    if (!source) {
+      setBeatError('Recording failed: evaluate a full buffer before recording.');
+      return;
+    }
+    try {
+      recordingRef.current = startRecording(recordingMode, source);
+      setRecording(true);
+      setBeatError(undefined);
+    } catch (error) {
+      recordingRef.current = undefined;
+      setBeatError(recordingFailureMessage(error));
+    }
+  }, [open, recordingMode]);
   const sessionOperationTail = useRef<Promise<void>>(Promise.resolve());
   const queueSessionOperation = useCallback((operation: () => Promise<void>): Promise<void> => {
     const current = sessionOperationTail.current.then(operation, operation);
@@ -240,6 +306,7 @@ export function App() {
   const showBeat = useCallback(
     (name: string, content: string) => {
       beatActivationRef.current += 1;
+      lastSuccessfulBufferRef.current = undefined;
       bufferRef.current = content;
       setBuffer(content);
       openRef.current = name;
@@ -314,6 +381,14 @@ export function App() {
       const available = await desktop.harness.list();
       setHarnesses(available);
       setHarness(available[0]?.id ?? 'shell');
+      // The settings surfaces are optional extras: a failure to load them must
+      // not take the session list and the harness down with it.
+      await desktop.sessions
+        .rootStatus()
+        .then(setRootStatus)
+        .catch(() => setRootStatus(undefined));
+      // Bundled read-only library removed; future library is a separate
+      // wiki-like sound-sample reference, not a session/beat collection.
     })();
   }, []);
 
@@ -882,6 +957,23 @@ export function App() {
     setPicking(false);
   }, [setCode]);
 
+  // The main process re-roots itself on a successful choice, so the picker
+  // must re-read the root and the session list it now serves.
+  const chooseRoot = useCallback(() => {
+    void (async () => {
+      try {
+        const status = await desktop.sessions.chooseRoot();
+        setRootStatus(status);
+        setRoot(await desktop.sessions.root());
+        setSessions(await desktop.sessions.list());
+      } catch (error) {
+        setBeatError(error instanceof Error ? error.message : String(error));
+      }
+    })();
+  }, []);
+
+  const readLibraryBeat = useCallback((name: string) => Promise.reject(new Error('Library removed')), []);
+
   useEffect(() => {
     // FileTree is unmounted when the sidebar is collapsed. Its naming/delete
     // draft therefore belongs in App, and stale targets must be retired when
@@ -966,6 +1058,10 @@ export function App() {
         onCreate={(name) => void openSession(name, true)}
         onRemove={removeSession}
         onCancel={session ? cancelSessionPicker : undefined}
+        rootStatus={rootStatus}
+        onChooseRoot={session ? undefined : chooseRoot}
+        library={[]}
+        readLibraryBeat={readLibraryBeat}
       />
     );
   }
@@ -986,7 +1082,6 @@ export function App() {
         <span className="beat">
           <b>{open?.replace(/\.js$/, '') ?? 'no beat'}</b>
           {dirty ? ' *' : ''}
-          {playbackSource && playbackSource !== open ? ` (playing: ${playbackSource.replace(/\.js$/, '')})` : ''}
         </span>
         <span className="transport">
           <button onClick={toggle}>{state.started ? '■ stop' : '▶ play'}</button>
@@ -1005,6 +1100,16 @@ export function App() {
           </button>
         </span>
         <span className="transport right">
+          <button
+            onClick={() => void record()}
+            disabled={!open || savingTake}
+            title={recording ? 'Stop recording' : 'Record'}
+          >
+            {recording ? '■ stop rec' : `● record [${recordingMode}]`}
+          </button>
+          <button className="collapse" onClick={() => setShowSettings((shown) => !shown)} title="Recording settings">
+            [ settings ]
+          </button>
           <button
             className="collapse"
             onClick={() => setTermOpen(termOpen ? 0 : 1)}
@@ -1096,7 +1201,12 @@ export function App() {
         label="Resize plugin dock"
       />
 
-      <PluginDock dock={dock} onChange={setDock} playing={state.started} />
+      <PluginDock
+        dock={dock}
+        onChange={setDock}
+        playing={state.started}
+        scope={open === undefined ? {} : { beat: open }}
+      />
 
       <StatusBar
         root={root}
@@ -1106,8 +1216,30 @@ export function App() {
         cps={cps}
         harness={harness}
         error={state.error?.message}
-        recordingMode="audio"
+        recordingMode={recordingMode}
       />
+      {showSettings && (
+        <div className="settings-popover" role="dialog" aria-label="Recording settings">
+          <b>recording form</b>
+          <label>
+            Record button produces
+            <select
+              value={recordingMode}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (isRecordingMode(value)) changeRecordingMode(value);
+              }}
+            >
+              {RECORDING_MODES.map((item) => (
+                <option key={item.mode} value={item.mode}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button onClick={() => setShowSettings(false)}>close</button>
+        </div>
+      )}
     </div>
   );
 }
