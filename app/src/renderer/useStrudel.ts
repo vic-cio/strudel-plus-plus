@@ -50,11 +50,14 @@ export type ReplState = {
   error?: Error;
 };
 
-export function useStrudel(onCodeChange: (code: string) => void, onSuccessfulEval?: (code: string) => void) {
+export type PlaybackSource = string | null;
+
+export function useStrudel(onCodeChange: (code: string) => void) {
   const pollRef = useRef<number>(undefined);
   const editorRef = useRef<StrudelMirror>(undefined);
   const pendingCodeRef = useRef<string | undefined>(undefined);
   const [state, setState] = useState<ReplState>({ started: false });
+  const [playbackSource, setPlaybackSource] = useState<PlaybackSource>(null);
   const [cps, setCps] = useState(0.5);
   // Set once he touches the tempo control, and re-applied after every
   // evaluation from then on. A beat carrying setcps or setcpm would otherwise
@@ -76,6 +79,7 @@ export function useStrudel(onCodeChange: (code: string) => void, onSuccessfulEva
     void editor.stop();
     editor.clear();
     setState({ started: false });
+    setPlaybackSource(null);
   }, []);
 
   const containerRef = useCallback(
@@ -104,7 +108,6 @@ export function useStrudel(onCodeChange: (code: string) => void, onSuccessfulEva
         beforeEval: () => audioReady,
         onUpdateState: (next: ReplState) => setState({ ...next }),
         afterEval: () => {
-          onSuccessfulEval?.(editor.code ?? '');
           if (chosenCps.current !== undefined) {
             editor.repl.setCps(chosenCps.current);
           }
@@ -137,7 +140,7 @@ export function useStrudel(onCodeChange: (code: string) => void, onSuccessfulEva
         }
       }, 120);
     },
-    [destroyEditor, onSuccessfulEval],
+    [destroyEditor],
   );
 
   useEffect(() => destroyEditor, [destroyEditor]);
@@ -177,9 +180,19 @@ export function useStrudel(onCodeChange: (code: string) => void, onSuccessfulEva
     void editorRef.current?.toggle().catch(report);
   }, [report]);
 
-  const evaluate = useCallback(() => {
-    void editorRef.current?.evaluate().catch(report);
-  }, [report]);
+  const evaluate = useCallback(
+    (sourceBeat?: string) => {
+      void editorRef.current?.evaluate().then(
+        () => {
+          if (sourceBeat !== undefined) {
+            setPlaybackSource(sourceBeat);
+          }
+        },
+        (err: unknown) => report(err),
+      );
+    },
+    [report],
+  );
 
   /** Re-run the pattern in place, so a change lands on the next cycle. */
   const reevaluate = useCallback(() => {
@@ -225,6 +238,8 @@ export function useStrudel(onCodeChange: (code: string) => void, onSuccessfulEva
   return {
     containerRef,
     state,
+    playbackSource,
+    setPlaybackSource: (source: PlaybackSource) => setPlaybackSource(source),
     setCode,
     getCode,
     clearError,
