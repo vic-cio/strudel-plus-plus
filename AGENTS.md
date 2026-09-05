@@ -64,6 +64,14 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Recording mode is a typed renderer preference (`app/src/shared/recording.ts`) stored in local storage; successful full-buffer evaluation is captured by `useStrudel`'s `afterEval` callback, while `app/src/renderer/recording.ts` captures the live master stream. Main-process export writes a temporary `.partial` file and renames it only after success (`app/src/main/recordingExport.ts`), so failed exports do not present incomplete artifacts.
 
+## Release / distribution (durable note)
+
+- Release artifacts: `.dmg` and `.zip` via `.github/workflows/release.yml` (public release requires `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `DEVELOPER_ID_APP_IDENTITY`; dry-run is explicitly separate and unsigned).
+- Architecture: `arm64` only; `x64`/`universal` not offered until prebuild compatibility is verified.
+- Electron-builder version: 25.1.8; `mac.notarize: true`, `mac.hardenedRuntime: true`, `npmRebuild: false` (to keep native prebuilds).
+- Release-time verification: `scripts/verify-release-packaging.mjs` checks packaged modules (`node_modules` + `.external/strudel`) are present; does not claim offline sample tests (remote banks remain network-accessed).
+- See `release-docs/release-setup.md` for Apple Developer setup, secret names, tag/release steps, and Gatekeeper expectations.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
