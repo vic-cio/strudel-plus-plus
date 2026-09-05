@@ -61,7 +61,10 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
       const pane = state.panes?.[action.paneIndex] ?? { tabs: [] };
       const tabs = (pane.tabs ?? []).filter((id) => id !== action.instanceId);
       const nextPanes = [...(state.panes ?? [{ tabs: [] }])];
-      nextPanes[action.paneIndex] = { tabs, active: pane.active === action.instanceId ? (tabs[0] ?? undefined) : (pane.active ?? undefined) } as DockPaneState;
+      nextPanes[action.paneIndex] = {
+        tabs,
+        active: pane.active === action.instanceId ? (tabs[0] ?? undefined) : (pane.active ?? undefined),
+      } as DockPaneState;
       return { ...state, panes: nextPanes as DockPaneState[] };
     }
     case 'SET_ACTIVE': {
