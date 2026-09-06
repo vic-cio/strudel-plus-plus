@@ -16,6 +16,8 @@ export type DockPaneState = {
   active?: string;
 };
 
+import type { FloatingPanel, Geometry } from './dockReducer';
+
 export type DockState = {
   /** Two panes side by side, or one full-width pane. */
   split?: boolean;
@@ -23,6 +25,8 @@ export type DockState = {
   panes?: DockPaneState[];
   /** Per-plugin UI state (faders, knobs), keyed by plugin id. */
   pluginState?: Record<string, unknown>;
+  /** Floating panels detached from the dock panes. */
+  floating?: FloatingPanel[];
 };
 
 /** What normalizeDockState produces: every field present, nothing unknown. */
@@ -30,6 +34,7 @@ export type NormalizedDockState = {
   split: boolean;
   panes: DockPaneState[];
   pluginState?: Record<string, unknown>;
+  floating?: FloatingPanel[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,7 +66,27 @@ export function isDockState(value: unknown): value is DockState {
   if (value.panes !== undefined && !(Array.isArray(value.panes) && value.panes.every(isPane))) {
     return false;
   }
-  return value.pluginState === undefined || isRecord(value.pluginState);
+  if (value.pluginState !== undefined && !isRecord(value.pluginState)) {
+    return false;
+  }
+  if (value.floating !== undefined && !(Array.isArray(value.floating) && value.floating.every(isFloatingPanel))) {
+    return false;
+  }
+  return true;
+}
+
+function isFloatingPanel(value: unknown): value is FloatingPanel {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (typeof (value as Record<string, unknown>).instanceId !== 'string') {
+    return false;
+  }
+  const geo = (value as Record<string, unknown>).geometry;
+  if (!isRecord(geo)) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -84,6 +109,26 @@ export function normalizeDockState(dock: DockState | undefined, knownIds: readon
   const normalized: NormalizedDockState = { split, panes };
   if (dock?.pluginState && Object.keys(dock.pluginState).length > 0) {
     normalized.pluginState = { ...dock.pluginState };
+  }
+  if (dock?.floating !== undefined) {
+    const floating: FloatingPanel[] = [];
+    const seen = new Set<string>();
+    for (const panel of dock.floating) {
+      if (typeof panel?.instanceId === 'string' && known.has(panel.instanceId) && !seen.has(panel.instanceId)) {
+        seen.add(panel.instanceId);
+        const geo: Geometry = {
+          x: typeof panel.geometry?.x === 'number' ? panel.geometry.x : 20,
+          y: typeof panel.geometry?.y === 'number' ? panel.geometry.y : 20,
+          width: typeof panel.geometry?.width === 'number' && panel.geometry.width > 0 ? panel.geometry.width : 320,
+          height: typeof panel.geometry?.height === 'number' && panel.geometry.height > 0 ? panel.geometry.height : 180,
+          zIndex: typeof panel.geometry?.zIndex === 'number' ? panel.geometry.zIndex : 1,
+        };
+        floating.push({ instanceId: panel.instanceId, geometry: geo });
+      }
+    }
+    if (floating.length > 0) {
+      normalized.floating = floating;
+    }
   }
   return normalized;
 }
