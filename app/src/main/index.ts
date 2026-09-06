@@ -13,11 +13,13 @@ import { resolveSessionsRoot } from './sessionsRoot';
 import { createPtyHost } from './pty';
 import { watchBeats } from './watcher';
 import { createSessionRootSetting } from './sessionRootPointer';
+import { createSettingsStore } from './settingsStore';
 import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
 import type { SessionOpenResult, SessionState } from '../shared/session';
 import { writeRecording } from './recordingExport';
+import { validateSettings } from './settings';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html',
@@ -221,6 +223,23 @@ async function main() {
   });
   ipcMain.on(CH.dirtyState, (_event, dirty: boolean) => {
     closeDirty = dirty;
+  });
+
+  const settingsStore = createSettingsStore(app.getPath('userData'));
+  let currentSettings = await settingsStore.load();
+
+  ipcMain.handle(CH.settingsLoad, () => currentSettings);
+  ipcMain.handle(CH.settingsSave, async (_event, s: unknown) => {
+    const validated = validateSettings(s);
+    await settingsStore.save(validated);
+    currentSettings = validated;
+    return validated;
+  });
+  ipcMain.handle(CH.settingsUpdate, async (_event, partial: unknown) => {
+    const next = validateSettings({ ...currentSettings, ...(partial as object) });
+    await settingsStore.save(next);
+    currentSettings = next;
+    return next;
   });
 
   ipcMain.handle(CH.harnessList, () => config.harnesses);

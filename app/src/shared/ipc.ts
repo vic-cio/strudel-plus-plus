@@ -34,6 +34,9 @@ export const CH = {
   closeCheck: 'close:check',
   dirtyState: 'close:dirty-state',
   saveAllTrigger: 'close:save-all-trigger',
+  settingsLoad: 'settings:load',
+  settingsSave: 'settings:save',
+  settingsUpdate: 'settings:update',
 } as const;
 
 /**
@@ -45,8 +48,12 @@ export type SessionRootStatus =
   | { state: 'ok'; path: string }
   | { state: 'invalid'; path: string; error: string };
 
+export type SettingsPayload = import('./settings').Settings;
+
 export type BeatChange = {
   /** Path relative to the beats root, using forward slashes. */
   name: string;
   event: 'add' | 'change' | 'unlink';
 };
+
+export type SettingsLoadResult = import('./settings').Settings;

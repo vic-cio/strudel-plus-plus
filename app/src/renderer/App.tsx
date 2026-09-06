@@ -7,6 +7,7 @@ import { PluginDock } from './components/PluginDock';
 import { SessionPicker, type SessionSummary } from './components/SessionPicker';
 import { StatusBar } from './components/StatusBar';
 import { TempoBox } from './components/TempoBox';
+import { SettingsPage } from './SettingsPage';
 import { desktop } from './desktop';
 import {
   acceptDisk,
@@ -94,6 +95,7 @@ export function App() {
   // clamp is applied against the live window height, not a fixed guess.
   const [dockHeight, setDockHeight] = usePaneWidth('pane.dock', DOCK_DEFAULT);
   const [windowHeight, setWindowHeight] = useState(() => window.innerHeight);
+  const [showSettings, setShowSettings] = useState(false);
   const [cpsByBeat, setCpsByBeat] = useState<Record<string, number>>({});
   const [draftState, setDraftState] = useState<DraftState>({});
   // Plugin dock layout: which devices are open, how the dock is split, and
@@ -103,6 +105,16 @@ export function App() {
   const [beatSwitchTiming, setBeatSwitchTiming] = useState<BeatSwitchTiming>(
     DEFAULT_SETTINGS.beatSwitchTiming as BeatSwitchTiming,
   );
+  const [recordMode, setRecordMode] = useState('audio');
+  const [closeBehavior, setCloseBehavior] = useState(DEFAULT_SETTINGS.closeBehavior);
+
+  useEffect(() => {
+    desktop.settings.load().then((s) => {
+      if (s.beatSwitchTiming) setBeatSwitchTiming(s.beatSwitchTiming);
+      if (s.recordConfig?.mode) setRecordMode(s.recordConfig.mode);
+      if (s.closeBehavior) setCloseBehavior(s.closeBehavior);
+    });
+  }, []);
 
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
@@ -979,6 +991,10 @@ export function App() {
     [dockH, setDockHeight],
   );
 
+  if (showSettings) {
+    return <SettingsPage onBack={() => setShowSettings(false)} />;
+  }
+
   if (picking) {
     return (
       <SessionPicker
@@ -1028,6 +1044,9 @@ export function App() {
           </button>
         </span>
         <span className="transport right">
+          <button className="collapse" onClick={() => setShowSettings((v) => !v)} title="Settings">
+            ⚙
+          </button>
           <button
             className="collapse"
             onClick={() => setTermOpen(termOpen ? 0 : 1)}
@@ -1131,7 +1150,7 @@ export function App() {
         cps={cps}
         harness={harness}
         error={state.error?.message}
-        recordingMode="audio"
+        recordingMode={recordMode}
       />
     </div>
   );

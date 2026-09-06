@@ -56,6 +56,11 @@ const api = {
     check: (): Promise<{ dirty: boolean }> => ipcRenderer.invoke(CH.closeCheck),
     reportDirty: (dirty: boolean) => ipcRenderer.send(CH.dirtyState, dirty),
   },
+  settings: {
+    load: (): Promise<import('../shared/settings').Settings> => ipcRenderer.invoke(CH.settingsLoad),
+    save: (s: import('../shared/settings').Settings): Promise<void> => ipcRenderer.invoke(CH.settingsSave, s),
+    update: (partial: Partial<import('../shared/settings').Settings>): Promise<import('../shared/settings').Settings> => ipcRenderer.invoke(CH.settingsUpdate, partial),
+  },
   recording: {
     save: (data: Uint8Array, suggestedName: string): Promise<string | undefined> =>
       ipcRenderer.invoke(CH.recordingSave, data, suggestedName),
