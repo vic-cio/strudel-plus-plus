@@ -187,9 +187,11 @@ describe('PluginDock', () => {
     await user.click(screen.getByTitle('Float MIXER'));
 
     expect(document.querySelector('.floating-panel')).toBeTruthy();
-    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as DockState;
-    expect(lastCall.panes?.[0]?.tabs).not.toContain('mixer');
-    expect(lastCall.floating?.some((f) => f.instanceId === 'mixer')).toBe(true);
+    const calls = onChange.mock.calls;
+    const lastCall = calls[calls.length - 1]?.[0] as DockState | undefined;
+    expect(lastCall).toBeDefined();
+    expect((lastCall!.panes?.[0]?.tabs ?? [])).not.toContain('mixer');
+    expect(lastCall!.floating?.some((f) => f.instanceId === 'mixer')).toBe(true);
   });
 
   it('closes a floating panel and reattaches it to the first pane', async () => {
@@ -202,8 +204,10 @@ describe('PluginDock', () => {
 
     await user.click(screen.getByTitle('Reattach MIXER'));
 
-    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as DockState;
-    expect(lastCall.panes?.[0]?.tabs).toContain('mixer');
+    const calls = onChange.mock.calls;
+    const lastCall = calls[calls.length - 1]?.[0] as DockState | undefined;
+    expect(lastCall).toBeDefined();
+    expect((lastCall!.panes?.[0]?.tabs ?? [])).toContain('mixer');
   });
 
   it('keeps active plugin control working inside a floating panel', async () => {
@@ -217,8 +221,10 @@ describe('PluginDock', () => {
 
     const buttons = screen.getAllByText('turn');
     await user.click(buttons[buttons.length - 1] as HTMLElement);
-    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0] as DockState;
-    expect(lastCall.pluginState?.knob).toEqual({ turned: true });
+    const calls = onChange.mock.calls;
+    const lastCall = calls[calls.length - 1]?.[0] as DockState | undefined;
+    expect(lastCall).toBeDefined();
+    expect(lastCall!.pluginState ? lastCall!.pluginState.knob : undefined).toEqual({ turned: true });
   });
 
   it('brings a floating panel to front when clicked', async () => {

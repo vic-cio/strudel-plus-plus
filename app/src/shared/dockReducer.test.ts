@@ -13,7 +13,7 @@ describe('dockReducer', () => {
       { split: false, panes: [{ tabs: [] }] },
       { type: 'ADD_TAB', paneIndex: 0, instanceId: 'i1' },
     );
-    expect(result.panes?.[0]?.tabs).toContain('i1');
+    expect(result.panes?.[0]?.tabs ?? []).toContain('i1');
   });
 
   it('floats a panel and updates geometry', () => {
@@ -22,7 +22,7 @@ describe('dockReducer', () => {
       { type: 'FLOAT_PANEL', instanceId: 'a', geometry: { x: 30, y: 30, width: 200, height: 150, zIndex: 2 } },
     );
     expect(result.floating?.length).toBe(1);
-    expect(result.floating?.[0].geometry.x).toBe(30);
+    expect(result.floating?.[0]?.geometry.x).toBe(30);
   });
 
   it('closes a floating panel', () => {
