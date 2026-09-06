@@ -4,6 +4,26 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { App } from './App';
 
+// Minimal in-memory localStorage for the jsdom environment that does not provide it.
+if (typeof (globalThis as any).localStorage === 'undefined') {
+  const store: Record<string, string> = {};
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => (store[k] !== undefined ? store[k] : null),
+    setItem: (k: string, v: string) => {
+      store[k] = String(v);
+    },
+    removeItem: (k: string) => {
+      delete store[k];
+    },
+    clear: () => {
+      for (const k in store) delete store[k];
+    },
+  };
+  if ((globalThis as any).window) {
+    (globalThis as any).window.localStorage = (globalThis as any).localStorage;
+  }
+}
+
 /**
  * The App talks to the desktop bridge, so the whole bridge is faked here. The
  * tests watch `sessions.setState` calls: the persisted beat pointer must

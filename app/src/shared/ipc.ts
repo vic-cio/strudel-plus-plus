@@ -31,6 +31,9 @@ export const CH = {
   midiSend: 'midi:send',
   midiPorts: 'midi:ports',
   recordingSave: 'recording:save',
+  closeCheck: 'close:check',
+  dirtyState: 'close:dirty-state',
+  saveAllTrigger: 'close:save-all-trigger',
 } as const;
 
 /**

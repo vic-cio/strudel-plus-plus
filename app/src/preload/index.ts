@@ -52,6 +52,10 @@ const api = {
     send: (messages: { port: string; message: number[]; offset: number }[]) => ipcRenderer.send(CH.midiSend, messages),
     ports: (): Promise<string[]> => ipcRenderer.invoke(CH.midiPorts),
   },
+  close: {
+    check: (): Promise<{ dirty: boolean }> => ipcRenderer.invoke(CH.closeCheck),
+    reportDirty: (dirty: boolean) => ipcRenderer.send(CH.dirtyState, dirty),
+  },
   recording: {
     save: (data: Uint8Array, suggestedName: string): Promise<string | undefined> =>
       ipcRenderer.invoke(CH.recordingSave, data, suggestedName),

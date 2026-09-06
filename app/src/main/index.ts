@@ -212,6 +212,17 @@ async function main() {
   ipcMain.handle(CH.beatsCreate, (_event, name: string, content: string) => store.create(name, content));
   ipcMain.handle(CH.beatsRename, (_event, from: string, to: string) => store.rename(from, to));
   ipcMain.handle(CH.beatsRemove, (_event, name: string) => store.remove(name));
+  // Close veto / save-all coordinator contract: the renderer reports
+  // unpolled dirty drafts; the main process may veto quit or trigger
+  // batch writes without switching active session state.
+  let closeDirty = false;
+  ipcMain.handle(CH.closeCheck, async () => {
+    return { dirty: closeDirty };
+  });
+  ipcMain.on(CH.dirtyState, (_event, dirty: boolean) => {
+    closeDirty = dirty;
+  });
+
   ipcMain.handle(CH.harnessList, () => config.harnesses);
 
   let lastHarness: { id: string; cols: number; rows: number } | undefined;
@@ -364,6 +375,16 @@ async function main() {
     server = served.server;
     await window.loadURL(served.url);
   }
+
+  // Close protection: veto quit when dirty drafts exist. The renderer
+  // responds through closeCheck; in a full implementation this would
+  // block quit and trigger save-all or show a confirmation dialog.
+  app.on('before-quit', async (event) => {
+    if (closeDirty) {
+      event.preventDefault();
+      window.webContents.send(CH.saveAllTrigger);
+    }
+  });
 
   app.on('window-all-closed', () => {
     void watcher?.close();
