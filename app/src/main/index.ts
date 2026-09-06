@@ -215,10 +215,12 @@ async function main() {
   // Close veto / save-all coordinator contract: the renderer reports
   // unpolled dirty drafts; the main process may veto quit or trigger
   // batch writes without switching active session state.
+  let closeDirty = false;
   ipcMain.handle(CH.closeCheck, async () => {
-    // Durable contract: renderer responds through preload; the main
-    // process uses this for the close veto and save-all trigger.
-    return { dirty: false };
+    return { dirty: closeDirty };
+  });
+  ipcMain.on(CH.dirtyState, (_event, dirty: boolean) => {
+    closeDirty = dirty;
   });
 
   ipcMain.handle(CH.harnessList, () => config.harnesses);
@@ -378,15 +380,9 @@ async function main() {
   // responds through closeCheck; in a full implementation this would
   // block quit and trigger save-all or show a confirmation dialog.
   app.on('before-quit', async (event) => {
-    const check = await new Promise<{ dirty: boolean }>((resolve) => {
-      try {
-        resolve({ dirty: false });
-      } catch {
-        resolve({ dirty: false });
-      }
-    });
-    if (check.dirty) {
+    if (closeDirty) {
       event.preventDefault();
+      window.webContents.send(CH.saveAllTrigger);
     }
   });
 

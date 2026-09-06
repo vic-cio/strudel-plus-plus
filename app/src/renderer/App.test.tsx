@@ -9,9 +9,15 @@ if (typeof (globalThis as any).localStorage === 'undefined') {
   const store: Record<string, string> = {};
   (globalThis as any).localStorage = {
     getItem: (k: string) => (store[k] !== undefined ? store[k] : null),
-    setItem: (k: string, v: string) => { store[k] = String(v); },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { for (const k in store) delete store[k]; },
+    setItem: (k: string, v: string) => {
+      store[k] = String(v);
+    },
+    removeItem: (k: string) => {
+      delete store[k];
+    },
+    clear: () => {
+      for (const k in store) delete store[k];
+    },
   };
   if ((globalThis as any).window) {
     (globalThis as any).window.localStorage = (globalThis as any).localStorage;

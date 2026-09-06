@@ -54,6 +54,7 @@ const api = {
   },
   close: {
     check: (): Promise<{ dirty: boolean }> => ipcRenderer.invoke(CH.closeCheck),
+    reportDirty: (dirty: boolean) => ipcRenderer.send(CH.dirtyState, dirty),
   },
   recording: {
     save: (data: Uint8Array, suggestedName: string): Promise<string | undefined> =>
