@@ -74,6 +74,16 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
         <label>
           Sessions root
           <span>{settings.sessionsRoot ?? '(default)'}</span>
+          <button
+            onClick={async () => {
+              const status = await desktop.sessions.chooseRoot();
+              const updated = await desktop.settings.load();
+              setSettings(updated);
+              setSaved(true);
+            }}
+          >
+            Change...
+          </button>
         </label>
       </section>
       <div className="settings-footer">

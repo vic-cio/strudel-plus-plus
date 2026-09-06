@@ -16,7 +16,7 @@ export function createSettingsStore(configDir: string) {
     } catch (e: unknown) {
       const code = typeof e === 'object' && e !== null && 'code' in e ? (e as { code?: unknown }).code : undefined;
       if (code === 'ENOENT') return null;
-      return null;
+      throw e;
     }
   }
 
