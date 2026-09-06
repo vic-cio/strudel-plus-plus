@@ -3,6 +3,7 @@
  */
 
 import type { Geometry, FloatingPanel } from './dockReducer';
+
 export type { Geometry, FloatingPanel } from './dockReducer';
 
 export function defaultGeometry(width: number, height: number, zIndex: number): Geometry {

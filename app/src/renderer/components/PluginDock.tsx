@@ -174,7 +174,7 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [state, onChange, byId]);
+  }, [onChange, byId]);
 
   // Focus behavior: clicking anywhere on floating panel brings to front
   const focusPanel = useCallback((id: string) => {
