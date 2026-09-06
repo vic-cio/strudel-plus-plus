@@ -64,7 +64,9 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Recording seam
 
+- `RecordControl` (`app/src/renderer/components/RecordControl.tsx`) is the recording UI; it reads `mode`/`source`/`masterAvailable` props and reports `RecordEvent` (`start`/`stop`/`complete`/`fail`). The `complete` event currently passes `filePath: undefined` (blob handled externally; declined fix `rc-complete-missing-filepath`). `masterAvailable` must be true (live master mix present) for recording; false surfaces a visible `fail` event with `recordingFailureMessage`.
 - Recording mode is a typed renderer preference (`app/src/shared/recording.ts`) stored in local storage; successful full-buffer evaluation is captured by `useStrudel`'s `afterEval` callback, while `app/src/renderer/recording.ts` captures the live master stream. Main-process export writes a temporary `.partial` file and renames it only after success (`app/src/main/recordingExport.ts`), so failed exports do not present incomplete artifacts.
+- Active recording form is shown through the component's `recording`/`timerSec` state; session state should reflect when a recording is in progress.
 
 ## Release / distribution (durable note)
 
