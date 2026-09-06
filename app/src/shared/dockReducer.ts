@@ -99,8 +99,10 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
           geometry: {
             x: typeof action.geometry?.x === 'number' ? action.geometry.x : 20,
             y: typeof action.geometry?.y === 'number' ? action.geometry.y : 20,
-            width: typeof action.geometry?.width === 'number' && action.geometry.width > 0 ? action.geometry.width : 320,
-            height: typeof action.geometry?.height === 'number' && action.geometry.height > 0 ? action.geometry.height : 180,
+            width:
+              typeof action.geometry?.width === 'number' && action.geometry.width > 0 ? action.geometry.width : 320,
+            height:
+              typeof action.geometry?.height === 'number' && action.geometry.height > 0 ? action.geometry.height : 180,
             zIndex: typeof action.geometry?.zIndex === 'number' ? action.geometry.zIndex : 1,
           },
         });
@@ -136,7 +138,8 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
           x: typeof action.geometry?.x === 'number' ? action.geometry.x : 20,
           y: typeof action.geometry?.y === 'number' ? action.geometry.y : 20,
           width: typeof action.geometry?.width === 'number' && action.geometry.width > 0 ? action.geometry.width : 320,
-          height: typeof action.geometry?.height === 'number' && action.geometry.height > 0 ? action.geometry.height : 180,
+          height:
+            typeof action.geometry?.height === 'number' && action.geometry.height > 0 ? action.geometry.height : 180,
           zIndex: typeof action.geometry?.zIndex === 'number' ? action.geometry.zIndex : 1,
         },
       });

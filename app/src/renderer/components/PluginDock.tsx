@@ -131,17 +131,20 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  const onPointerDown = useCallback((id: string, event: React.PointerEvent) => {
-    const panel = state.floating?.find((f) => f.instanceId === id);
-    if (!panel) return;
-    event.preventDefault();
-    dragRef.current = {
-      id,
-      startX: event.clientX,
-      startY: event.clientY,
-      startGeo: { ...panel.geometry },
-    };
-  }, [state.floating]);
+  const onPointerDown = useCallback(
+    (id: string, event: React.PointerEvent) => {
+      const panel = state.floating?.find((f) => f.instanceId === id);
+      if (!panel) return;
+      event.preventDefault();
+      dragRef.current = {
+        id,
+        startX: event.clientX,
+        startY: event.clientY,
+        startGeo: { ...panel.geometry },
+      };
+    },
+    [state.floating],
+  );
 
   useEffect(() => {
     const onMove = (event: MouseEvent) => {
@@ -177,25 +180,28 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
   }, [onChange, byId]);
 
   // Focus behavior: clicking anywhere on floating panel brings to front
-  const focusPanel = useCallback((id: string) => {
-    const currentFloating = state.floating ?? [];
-    if (!currentFloating.some((f) => f.instanceId === id)) {
-      return;
-    }
-    const maxZ = Math.max(0, ...currentFloating.map((f) => f.geometry.zIndex));
-    if (currentFloating.some((f) => f.instanceId === id && f.geometry.zIndex === maxZ)) {
-      return;
-    }
-    const floating = currentFloating.map((f) => ({
-      ...f,
-      geometry: {
-        ...f.geometry,
-        zIndex: f.instanceId === id ? maxZ + 1 : f.geometry.zIndex,
-      },
-    }));
-    const nextState: DockState = { ...state, floating };
-    onChange(normalizeDockState(nextState, [...byId.keys()]));
-  }, [state, onChange, byId]);
+  const focusPanel = useCallback(
+    (id: string) => {
+      const currentFloating = state.floating ?? [];
+      if (!currentFloating.some((f) => f.instanceId === id)) {
+        return;
+      }
+      const maxZ = Math.max(0, ...currentFloating.map((f) => f.geometry.zIndex));
+      if (currentFloating.some((f) => f.instanceId === id && f.geometry.zIndex === maxZ)) {
+        return;
+      }
+      const floating = currentFloating.map((f) => ({
+        ...f,
+        geometry: {
+          ...f.geometry,
+          zIndex: f.instanceId === id ? maxZ + 1 : f.geometry.zIndex,
+        },
+      }));
+      const nextState: DockState = { ...state, floating };
+      onChange(normalizeDockState(nextState, [...byId.keys()]));
+    },
+    [state, onChange, byId],
+  );
 
   // Add menu close behavior (existing)
   useEffect(() => {
@@ -235,11 +241,7 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
                       >
                         [ {def.label} ]
                       </button>
-                      <button
-                        className="dock-tab-float"
-                        title={`Float ${def.label}`}
-                        onClick={() => floatPlugin(id)}
-                      >
+                      <button className="dock-tab-float" title={`Float ${def.label}`} onClick={() => floatPlugin(id)}>
                         ⧉
                       </button>
                       <button

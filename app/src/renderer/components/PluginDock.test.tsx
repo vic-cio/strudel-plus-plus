@@ -226,9 +226,7 @@ describe('PluginDock', () => {
     renderDock({
       split: false,
       panes: [{ tabs: ['mixer'], active: 'mixer' }],
-      floating: [
-        { instanceId: 'mixer', geometry: { x: 10, y: 10, width: 300, height: 200, zIndex: 1 } },
-      ],
+      floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 300, height: 200, zIndex: 1 } }],
     });
 
     const panel = document.querySelector('.floating-panel') as HTMLElement;

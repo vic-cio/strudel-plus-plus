@@ -4,8 +4,6 @@
 
 import type { Geometry, FloatingPanel } from './dockReducer';
 
-export type { Geometry, FloatingPanel } from './dockReducer';
-
 export function defaultGeometry(width: number, height: number, zIndex: number): Geometry {
   return { x: 20 + zIndex * 30, y: 20 + zIndex * 30, width, height, zIndex };
 }

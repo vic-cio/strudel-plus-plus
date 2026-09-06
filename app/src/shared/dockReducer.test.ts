@@ -27,7 +27,11 @@ describe('dockReducer', () => {
 
   it('closes a floating panel', () => {
     const result = dockReducer(
-      { split: false, panes: [{ tabs: ['a'] }], floating: [{ instanceId: 'a', geometry: { x: 0, y: 0, width: 100, height: 100, zIndex: 1 } }] },
+      {
+        split: false,
+        panes: [{ tabs: ['a'] }],
+        floating: [{ instanceId: 'a', geometry: { x: 0, y: 0, width: 100, height: 100, zIndex: 1 } }],
+      },
       { type: 'CLOSE_FLOATING', instanceId: 'a' },
     );
     expect(result.floating).toBeUndefined();
