@@ -13,7 +13,12 @@ describe('settings store', () => {
 
   it('loads and saves validated settings', async () => {
     const store = createSettingsStore(dir);
-    await store.save({ version: SETTINGS_VERSION, beatSwitchTiming: 'manual', closeBehavior: 'auto-save', recordConfig: { enabled: true, mode: 'mp4' } });
+    await store.save({
+      version: SETTINGS_VERSION,
+      beatSwitchTiming: 'manual',
+      closeBehavior: 'auto-save',
+      recordConfig: { enabled: true, mode: 'mp4' },
+    });
     const loaded = await store.load();
     expect(loaded.beatSwitchTiming).toBe('manual');
     expect(loaded.closeBehavior).toBe('auto-save');
