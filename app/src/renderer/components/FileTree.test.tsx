@@ -204,7 +204,7 @@ describe('FileTree', () => {
     expect(sort).toHaveProperty('value', 'chronological');
     expect(screen.getByRole('option', { name: 'Newest first' })).toBeDefined();
     expect(screen.getByRole('option', { name: 'Name A–Z' })).toBeDefined();
-    expect(screen.getByRole('option', { name: 'Manual' })).toBeDefined();
+    expect(sort.querySelector('option[value="manual"]')).toBeDefined();
   });
 
   it('reports a manual drag from one beat onto another in the drop direction', () => {

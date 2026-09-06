@@ -938,3 +938,43 @@ body[data-resizing='true'][data-resize-axis='row'] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Floating plugin panels -------------------------------------------------- */
+.floating-panel {
+  position: absolute;
+  border: 1px solid var(--line-strong);
+  background: var(--ground);
+  background-image: var(--hatch);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 4px 4px 0 rgba(34, 17, 9, 0.35);
+}
+.floating-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  height: 22px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ground-sunk);
+  color: var(--ink-soft);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.floating-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+.dock-tab-float {
+  font-size: 10px;
+  color: var(--ink-faint);
+  padding: 0 3px;
+}
+.dock-tab-float:hover {
+  color: var(--ink);
+}

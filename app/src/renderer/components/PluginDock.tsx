@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { normalizeDockState, type DockPaneState, type DockState } from '../../shared/dockState';
+import { defaultGeometry, clampGeometry, applyDelta, type Geometry } from '../../shared/geometry';
+import type { FloatingPanel } from '../../shared/dockReducer';
 import { listPlugins } from '../plugins';
 import type { ControlContext } from '../plugins';
 import type { PluginDef } from '../plugins/registry';
@@ -14,23 +16,9 @@ type Props = {
   scope?: ControlContext;
 };
 
-/**
- * The plugin dock: one or two panes of live gear between the editors and the
- * status bar.
- *
- * Each pane is a tab strip over exactly one plugin, stretched to the pane. The
- * strip follows the pane-title pattern — sunk ground, hairline border,
- * bracketed labels — and never takes focus on its own: nothing here autofocuses
- * or calls focus(), so opening a device cannot pull the caret out of the
- * editor or the harness. The captain splits the dock for two devices or leaves
- * one pane full width for one that deserves it; both are remembered with the
- * session.
- */
 export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
   const defs = listPlugins();
   const byId = new Map<string, PluginDef>(defs.map((def) => [def.id, def]));
-  // Render from canonical state, so a session file written by an older build
-  // cannot summon tabs for plugins that no longer exist.
   const state = normalizeDockState(
     dock,
     defs.map((def) => def.id),
@@ -41,7 +29,6 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
   const openIds = new Set(state.panes.flatMap((pane) => pane.tabs ?? []));
   const candidates = defs.filter((def) => !openIds.has(def.id));
 
-  /** Write one pane back through the canonicalizer. */
   const writePane = (index: number, next: DockPaneState) => {
     onChange(
       normalizeDockState({ ...state, panes: state.panes.map((pane, i) => (i === index ? next : pane)) }, [
@@ -67,13 +54,57 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
     writePane(index, next);
   };
 
+  const floatPlugin = (id: string) => {
+    const floating = state.floating ? [...state.floating] : [];
+    // Remove from all pane tabs when floating (detach)
+    const nextPanes = state.panes.map((pane) => {
+      const tabs = (pane.tabs ?? []).filter((tab) => tab !== id);
+      const activeValue = pane.active === id ? (tabs[0] ?? undefined) : (pane.active ?? undefined);
+      const nextPane: DockPaneState = activeValue !== undefined ? { tabs, active: activeValue } : { tabs };
+      return nextPane;
+    });
+    if (!floating.some((f) => f.instanceId === id)) {
+      const currentZ = Math.max(0, ...floating.map((f) => f.geometry.zIndex));
+      floating.push({ instanceId: id, geometry: defaultGeometry(320, 180, currentZ + 1) });
+    } else {
+      // Already floating; bring to front by increasing zIndex
+      floating.forEach((f) => {
+        if (f.instanceId === id) {
+          f.geometry.zIndex = Math.max(...floating.map((ff) => ff.geometry.zIndex)) + 1;
+        }
+      });
+    }
+    const nextState: DockState = { ...state, panes: nextPanes };
+    if (floating.length > 0) {
+      (nextState as DockState & { floating?: FloatingPanel[] }).floating = floating;
+    } else {
+      delete (nextState as DockState & { floating?: FloatingPanel[] }).floating;
+    }
+    onChange(normalizeDockState(nextState, [...byId.keys()]));
+  };
+
+  const closeFloating = (id: string) => {
+    const floating = (state.floating ?? []).filter((f) => f.instanceId !== id);
+    // Reattach to first pane
+    const nextPanes = [...state.panes];
+    const firstPane = nextPanes[0] ?? { tabs: [] };
+    const tabs = [...(firstPane.tabs ?? [])];
+    if (!tabs.includes(id)) {
+      tabs.push(id);
+    }
+    nextPanes[0] = { ...firstPane, tabs, active: id };
+    const nextState: DockState = { ...state, panes: nextPanes };
+    if (floating.length > 0) {
+      nextState.floating = floating;
+    }
+    onChange(normalizeDockState(nextState, [...byId.keys()]));
+  };
+
   const toggleSplit = () => {
     if (!state.split) {
       onChange(normalizeDockState({ ...state, split: true, panes: [...state.panes, {}] }, [...byId.keys()]));
       return;
     }
-    // Merging keeps both panes' devices open: collapsing the dock is a layout
-    // change, not "close the mixer".
     const [first, second] = state.panes;
     const tabs = [...(first?.tabs ?? [])];
     for (const id of second?.tabs ?? []) {
@@ -95,22 +126,92 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
     );
   };
 
-  // The add menu closes on any click outside the dock, and on Escape, without
-  // stealing focus from wherever the caret was.
+  // Drag state for floating panels
+  const dragRef = useRef<{ id: string; startX: number; startY: number; startGeo: Geometry } | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  const onPointerDown = useCallback(
+    (id: string, event: React.PointerEvent) => {
+      const panel = state.floating?.find((f) => f.instanceId === id);
+      if (!panel) return;
+      event.preventDefault();
+      dragRef.current = {
+        id,
+        startX: event.clientX,
+        startY: event.clientY,
+        startGeo: { ...panel.geometry },
+      };
+    },
+    [state.floating],
+  );
+
   useEffect(() => {
-    if (menuPane === undefined) {
-      return;
+    const onMove = (event: MouseEvent) => {
+      if (!dragRef.current) return;
+      const deltaX = event.clientX - dragRef.current.startX;
+      const deltaY = event.clientY - dragRef.current.startY;
+      const updated = applyDelta(dragRef.current.startGeo, { x: deltaX, y: deltaY });
+      const container = { width: window.innerWidth, height: window.innerHeight };
+      const clamped = clampGeometry(updated, container);
+      const floating = (stateRef.current.floating ?? []).map((f) =>
+        f.instanceId === dragRef.current!.id ? { ...f, geometry: clamped } : f,
+      );
+      // Update z-order to front
+      const maxZ = Math.max(0, ...floating.map((f) => f.geometry.zIndex));
+      floating.forEach((f) => {
+        if (f.instanceId === dragRef.current!.id) {
+          f.geometry.zIndex = maxZ + 1;
+        }
+      });
+      onChange(normalizeDockState({ ...stateRef.current, floating }, [...byId.keys()]));
+    };
+    const onUp = () => {
+      dragRef.current = null;
+    };
+    if (dragRef.current) {
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
     }
-    const onDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && rootRef.current?.contains(event.target)) {
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [onChange, byId]);
+
+  // Focus behavior: clicking anywhere on floating panel brings to front
+  const focusPanel = useCallback(
+    (id: string) => {
+      const currentFloating = state.floating ?? [];
+      if (!currentFloating.some((f) => f.instanceId === id)) {
         return;
       }
+      const maxZ = Math.max(0, ...currentFloating.map((f) => f.geometry.zIndex));
+      if (currentFloating.some((f) => f.instanceId === id && f.geometry.zIndex === maxZ)) {
+        return;
+      }
+      const floating = currentFloating.map((f) => ({
+        ...f,
+        geometry: {
+          ...f.geometry,
+          zIndex: f.instanceId === id ? maxZ + 1 : f.geometry.zIndex,
+        },
+      }));
+      const nextState: DockState = { ...state, floating };
+      onChange(normalizeDockState(nextState, [...byId.keys()]));
+    },
+    [state, onChange, byId],
+  );
+
+  // Add menu close behavior (existing)
+  useEffect(() => {
+    if (menuPane === undefined) return;
+    const onDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
       setMenuPane(undefined);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setMenuPane(undefined);
-      }
+      if (event.key === 'Escape') setMenuPane(undefined);
     };
     window.addEventListener('pointerdown', onDown);
     window.addEventListener('keydown', onKey);
@@ -121,7 +222,7 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
   }, [menuPane]);
 
   return (
-    <section className="dock" aria-label="plugin dock" ref={rootRef}>
+    <section className="dock" aria-label="plugin dock" ref={rootRef} style={{ position: 'relative' }}>
       <div className={state.split ? 'dock-panes split' : 'dock-panes'}>
         {state.panes.map((pane, index) => {
           const activeDef = pane.active ? byId.get(pane.active) : undefined;
@@ -130,9 +231,7 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
               <div className="dock-tabs">
                 {(pane.tabs ?? []).map((id) => {
                   const def = byId.get(id);
-                  if (!def) {
-                    return null;
-                  }
+                  if (!def) return null;
                   return (
                     <span className="dock-tab" key={id}>
                       <button
@@ -141,6 +240,9 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
                         onClick={() => writePane(index, { ...pane, active: id })}
                       >
                         [ {def.label} ]
+                      </button>
+                      <button className="dock-tab-float" title={`Float ${def.label}`} onClick={() => floatPlugin(id)}>
+                        ⧉
                       </button>
                       <button
                         className="dock-tab-close"
@@ -203,6 +305,53 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
           );
         })}
       </div>
+
+      {/* Floating panels */}
+      {state.floating?.map((panel) => {
+        const def = byId.get(panel.instanceId);
+        if (!def) return null;
+        return (
+          <div
+            key={panel.instanceId}
+            className="floating-panel"
+            style={{
+              position: 'absolute',
+              left: panel.geometry.x,
+              top: panel.geometry.y,
+              width: panel.geometry.width,
+              height: panel.geometry.height,
+              zIndex: panel.geometry.zIndex,
+            }}
+            onClick={() => focusPanel(panel.instanceId)}
+          >
+            <div
+              className="floating-header"
+              onPointerDown={(e) => onPointerDown(panel.instanceId, e)}
+              style={{ cursor: 'move', userSelect: 'none' }}
+            >
+              <span>[ {def.label} ]</span>
+              <button
+                className="floating-close"
+                title={`Reattach ${def.label}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeFloating(panel.instanceId);
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div className="floating-body">
+              <def.mount
+                playing={playing}
+                state={state.pluginState?.[panel.instanceId]}
+                onState={(next) => setPluginState(panel.instanceId, next)}
+                scope={scope}
+              />
+            </div>
+          </div>
+        );
+      })}
     </section>
   );
 }
