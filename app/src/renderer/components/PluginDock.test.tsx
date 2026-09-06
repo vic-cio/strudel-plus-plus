@@ -190,7 +190,7 @@ describe('PluginDock', () => {
     const calls = onChange.mock.calls;
     const lastCall = calls[calls.length - 1]?.[0] as DockState | undefined;
     expect(lastCall).toBeDefined();
-    expect((lastCall!.panes?.[0]?.tabs ?? [])).not.toContain('mixer');
+    expect(lastCall!.panes?.[0]?.tabs ?? []).not.toContain('mixer');
     expect(lastCall!.floating?.some((f) => f.instanceId === 'mixer')).toBe(true);
   });
 
@@ -207,7 +207,7 @@ describe('PluginDock', () => {
     const calls = onChange.mock.calls;
     const lastCall = calls[calls.length - 1]?.[0] as DockState | undefined;
     expect(lastCall).toBeDefined();
-    expect((lastCall!.panes?.[0]?.tabs ?? [])).toContain('mixer');
+    expect(lastCall!.panes?.[0]?.tabs ?? []).toContain('mixer');
   });
 
   it('keeps active plugin control working inside a floating panel', async () => {
