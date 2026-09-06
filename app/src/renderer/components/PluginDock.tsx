@@ -128,6 +128,8 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
 
   // Drag state for floating panels
   const dragRef = useRef<{ id: string; startX: number; startY: number; startGeo: Geometry } | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const onPointerDown = useCallback((id: string, event: React.PointerEvent) => {
     const panel = state.floating?.find((f) => f.instanceId === id);
@@ -149,7 +151,7 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
       const updated = applyDelta(dragRef.current.startGeo, { x: deltaX, y: deltaY });
       const container = { width: window.innerWidth, height: window.innerHeight };
       const clamped = clampGeometry(updated, container);
-      const floating = (state.floating ?? []).map((f) =>
+      const floating = (stateRef.current.floating ?? []).map((f) =>
         f.instanceId === dragRef.current!.id ? { ...f, geometry: clamped } : f,
       );
       // Update z-order to front
@@ -159,7 +161,7 @@ export function PluginDock({ dock, onChange, playing, scope = {} }: Props) {
           f.geometry.zIndex = maxZ + 1;
         }
       });
-      onChange(normalizeDockState({ ...state, floating }, [...byId.keys()]));
+      onChange(normalizeDockState({ ...stateRef.current, floating }, [...byId.keys()]));
     };
     const onUp = () => {
       dragRef.current = null;
