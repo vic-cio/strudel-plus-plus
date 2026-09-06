@@ -30,7 +30,7 @@ function validateTiming(value: unknown): BeatSwitchTiming {
 function validateRecordConfig(value: unknown): Settings['recordConfig'] {
   if (!value || typeof value !== 'object') return DEFAULT_SETTINGS.recordConfig;
   const r = value as Record<string, unknown>;
-  const mode = r.mode === 'audio' || r.mode === 'mp4' ? r.mode : DEFAULT_SETTINGS.recordConfig?.mode ?? 'audio';
+  const mode = r.mode === 'audio' || r.mode === 'mp4' ? r.mode : (DEFAULT_SETTINGS.recordConfig?.mode ?? 'audio');
   return {
     enabled: r.enabled === true,
     mode,

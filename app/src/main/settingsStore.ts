@@ -1,6 +1,12 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { DEFAULT_SETTINGS, SETTINGS_VERSION, type Settings, type BeatSwitchTiming, type RecordingMode } from '../shared/settings';
+import {
+  DEFAULT_SETTINGS,
+  SETTINGS_VERSION,
+  type Settings,
+  type BeatSwitchTiming,
+  type RecordingMode,
+} from '../shared/settings';
 import { validateSettings } from './settings';
 
 const SETTINGS_FILE = 'strudel-settings.json';

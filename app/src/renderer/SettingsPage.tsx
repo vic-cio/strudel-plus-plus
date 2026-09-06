@@ -13,15 +13,22 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
     });
   }, []);
 
-  const update = useCallback(async (partial: Partial<Settings>) => {
-    if (!settings) return;
-    const next = await desktop.settings.update(partial);
-    setSettings(next);
-    setSaved(true);
-  }, [settings]);
+  const update = useCallback(
+    async (partial: Partial<Settings>) => {
+      if (!settings) return;
+      const next = await desktop.settings.update(partial);
+      setSettings(next);
+      setSaved(true);
+    },
+    [settings],
+  );
 
   if (!settings) {
-    return <div className="pane-body"><p>Loading settings...</p></div>;
+    return (
+      <div className="pane-body">
+        <p>Loading settings...</p>
+      </div>
+    );
   }
 
   return (
@@ -33,7 +40,9 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
           Record button action
           <select
             value={settings.recordConfig?.mode ?? 'audio'}
-            onChange={(e) => update({ recordConfig: { ...settings.recordConfig, mode: e.target.value as RecordingMode } })}
+            onChange={(e) =>
+              update({ recordConfig: { ...settings.recordConfig, mode: e.target.value as RecordingMode } })
+            }
           >
             <option value="audio">Audio</option>
             <option value="mp4">MP4 video</option>
