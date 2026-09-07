@@ -8,9 +8,27 @@
  */
 import './eq';
 import './gain';
+import './gainFunction';
 
-export { getPlugin, listPlugins, registerPlugin } from './registry';
-export type { PluginDef, PluginKind, PluginProps } from './registry';
+export { getPlugin, listFunctionPlugins, listPlugins, listSessionPlugins, registerPlugin } from './registry';
+export type {
+  FunctionPluginDef,
+  FunctionPluginProps,
+  PluginDef,
+  PluginKind,
+  PluginProps,
+  SessionPluginDef,
+} from './registry';
+export {
+  applyFunctionPluginValue,
+  createFunctionPluginInstance,
+  materializeFunctionControl,
+  moveFunctionPlugin,
+  resolveFunctionPluginTarget,
+  type FunctionPluginInstance,
+  type FunctionPluginPlacement,
+  type FunctionPluginTarget,
+} from './functionPlugin';
 export {
   isControlScopeActive,
   pruneInactiveControls,

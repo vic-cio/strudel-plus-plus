@@ -610,8 +610,13 @@ body[data-resizing='true'][data-resize-axis='row'] {
 
 /* Editor ------------------------------------------------------------------ */
 
+.editor-viewport {
+  position: relative;
+  overflow: hidden;
+}
 .editor {
   height: 100%;
+  width: 100%;
 }
 .editor .cm-editor {
   height: 100%;
@@ -634,6 +639,32 @@ body[data-resizing='true'][data-resize-axis='row'] {
 .editor .cm-cursor {
   border-left-color: var(--gold);
   border-left-width: 2px;
+}
+
+.editor-context-menu {
+  position: absolute;
+  z-index: 1000;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+  border: 1px solid var(--line-strong);
+  background: var(--ground);
+  box-shadow: 3px 3px 0 rgba(34, 17, 9, 0.35);
+}
+.editor-context-menu button {
+  border: 0;
+  padding: 4px 10px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-align: left;
+  white-space: nowrap;
+}
+.editor-context-menu button:hover,
+.editor-context-menu button:focus-visible {
+  color: var(--ink);
+  background: var(--ground-raised);
 }
 
 /* The conflict bar -------------------------------------------------------- */
@@ -887,6 +918,9 @@ body[data-resizing='true'][data-resize-axis='row'] {
   color: var(--rust);
   font-size: 10px;
   letter-spacing: 0.05em;
+}
+.function-docked-panel {
+  height: 100%;
 }
 
 /* Status bar -------------------------------------------------------------- */

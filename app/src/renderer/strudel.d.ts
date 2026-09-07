@@ -4,6 +4,13 @@ declare module '@strudel/codemirror' {
   export class StrudelMirror {
     constructor(options: Record<string, unknown>);
     code: string;
+    editor: {
+      posAtCoords(point: { x: number; y: number }): number | null;
+      state: {
+        wordAt(position: number): { from: number; to: number } | null;
+        doc: { sliceString(from: number, to: number): string };
+      };
+    };
     repl: { setCps(cps: number): void; scheduler?: { cps?: number } };
     setCode(code: string): void;
     setTheme(name: string): void;

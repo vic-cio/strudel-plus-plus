@@ -98,5 +98,6 @@ registerPlugin({
   id: 'gain',
   label: 'GAIN',
   kind: 'functional',
+  scope: 'session',
   mount: GainControl,
 });

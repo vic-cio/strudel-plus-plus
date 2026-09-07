@@ -164,4 +164,4 @@ export function EqSpectrum({ playing }: PluginProps) {
   );
 }
 
-registerPlugin({ id: 'eq', label: 'EQ', kind: 'visual', mount: EqSpectrum });
+registerPlugin({ id: 'eq', label: 'EQ', kind: 'visual', scope: 'session', mount: EqSpectrum });

@@ -41,7 +41,13 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
           <select
             value={settings.recordConfig?.mode ?? 'audio'}
             onChange={(e) =>
-              update({ recordConfig: { ...settings.recordConfig, mode: e.target.value as RecordingMode } })
+              update({
+                recordConfig: {
+                  enabled: settings.recordConfig?.enabled ?? false,
+                  ...settings.recordConfig,
+                  mode: e.target.value as RecordingMode,
+                },
+              })
             }
           >
             <option value="audio">Audio</option>

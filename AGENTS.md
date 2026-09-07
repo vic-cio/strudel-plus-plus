@@ -43,7 +43,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Live plugin controls
 
-- `app/src/renderer/plugins/controlModel.ts` owns the discriminated session/beat/function control scopes (`session`/`beat`/`function`); only `session` is actively consumed (gain plugin stores its value in `DockState.pluginState`). The `beat`/`function` scopes and the `scope`/`controlValues` plumbing on `PluginDock`/`registry` are currently unconsumed (removed from PluginDock in the fix round); `controlModel.ts` is kept as the ready-for-later model (with `isControlScopeActive`/`pruneInactiveControls`) for future draggable in-app panels.
+- `app/src/renderer/plugins/registry.ts` is the catalog for both persisted session devices and beat-local function controls. Function instances are resolved and edited through `functionPlugin.ts`, live only in `App` renderer state, and are cleared on beat/session switches; keep them out of `DockState` so they never persist with the session.
 - The gain slice uses `app/src/renderer/plugins/gainAudio.ts` as the narrow adapter to Strudel's `destinationGain.gain` AudioParam. Keep the engine import lazy: several renderer tests mock `useStrudel`, so importing `@strudel/webaudio` while registering plugins breaks those tests before they run.
 
 ## Default example session

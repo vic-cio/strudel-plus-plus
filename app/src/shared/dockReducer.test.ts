@@ -23,6 +23,7 @@ describe('dockReducer', () => {
     );
     expect(result.floating?.length).toBe(1);
     expect(result.floating?.[0]?.geometry.x).toBe(30);
+    expect(result.panes?.[0]?.tabs).toEqual([]);
   });
 
   it('closes a floating panel', () => {

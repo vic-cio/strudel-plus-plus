@@ -52,6 +52,7 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
     evaluate: vi.fn(),
     reevaluate: vi.fn(),
     getCode: vi.fn((): string | undefined => undefined),
+    tokenAt: vi.fn((): { text: string; offset: number } | undefined => undefined),
     containerRef: { current: null },
     cps: 0.5,
     changeCps: vi.fn(),
@@ -81,6 +82,11 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
     };
   };
   const desktop = {
+    settings: {
+      load: vi.fn(async () => ({ version: 1 })),
+      save: vi.fn(async () => {}),
+      update: vi.fn(async () => ({ version: 1 })),
+    },
     sessions: {
       root: vi.fn(async () => '/sessions-root'),
       rootStatus: vi.fn(async () => ({ state: 'ok', path: '/sessions-root' })),
@@ -191,7 +197,10 @@ beforeEach(() => {
   repl.clearError.mockClear();
   repl.getCode.mockReset();
   repl.getCode.mockReturnValue(undefined);
+  repl.tokenAt.mockReset();
+  repl.tokenAt.mockReturnValue(undefined);
   repl.setCode.mockClear();
+  repl.toggle.mockClear();
   repl.reevaluate.mockClear();
 });
 
@@ -884,6 +893,76 @@ describe('App plugin dock', () => {
 
     expect(screen.getByText('[ no device ]')).toBeTruthy();
     expect(screen.queryByText('[ GHOST ]')).toBeNull();
+  });
+});
+
+describe('editor context menu', () => {
+  it('starts stopped playback and spawns the supported function plugin', async () => {
+    const code = 's("bd").gain(0.25)';
+    repl.getCode.mockReturnValue(code);
+    repl.tokenAt.mockReturnValue({ text: 'gain', offset: code.indexOf('gain') + 1 });
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.contextMenu(document.querySelector('.editor')!, { clientX: 120, clientY: 90 });
+    const menu = screen.getByRole('menu', { name: 'Editor actions' });
+    expect(within(menu).getByRole('menuitem', { name: 'Start music' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: 'Stop music' })).toBeNull();
+    await user.click(within(menu).getByRole('menuitem', { name: 'Start music' }));
+    expect(repl.toggle).toHaveBeenCalledOnce();
+
+    fireEvent.contextMenu(document.querySelector('.editor')!, { clientX: 120, clientY: 90 });
+    await user.click(screen.getByRole('menuitem', { name: 'Spawn floating gain plugin' }));
+    expect(document.querySelector('.editor-viewport > .function-floating-panel')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('slider', { name: 'Function gain' }), { target: { value: '0.75' } });
+    expect(repl.setCode).toHaveBeenLastCalledWith('s("bd").gain(0.75)');
+    expect(repl.reevaluate).toHaveBeenCalled();
+
+    await waitFor(() => {
+      const writes = setStateMock.mock.calls.filter((call) => 'dock' in call[1]);
+      expect(writes.at(-1)?.[1].dock).toEqual({ split: false, panes: [{ tabs: [] }] });
+    });
+
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    expect(document.querySelector('.function-floating-panel')).toBeNull();
+  });
+
+  it('offers only Stop music while playback is running', async () => {
+    repl.state = { started: true, error: undefined };
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.contextMenu(document.querySelector('.editor')!);
+    const menu = screen.getByRole('menu', { name: 'Editor actions' });
+    expect(within(menu).getByRole('menuitem', { name: 'Stop music' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: 'Start music' })).toBeNull();
+    await user.click(within(menu).getByRole('menuitem', { name: 'Stop music' }));
+    expect(repl.toggle).toHaveBeenCalledOnce();
+  });
+
+  it('does not offer a plugin for an unsupported token and dismisses on Escape', async () => {
+    repl.tokenAt.mockReturnValue({ text: 'sometimes', offset: 1 });
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.contextMenu(document.querySelector('.editor')!);
+    const menu = screen.getByRole('menu', { name: 'Editor actions' });
+    expect(within(menu).getByRole('menuitem', { name: 'Start music' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: /Spawn floating/ })).toBeNull();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu', { name: 'Editor actions' })).toBeNull();
+
+    const editor = document.querySelector('.editor');
+    expect(editor).not.toBeNull();
+    if (!editor) return;
+    fireEvent.contextMenu(editor);
+    expect(screen.getByRole('menu', { name: 'Editor actions' })).toBeTruthy();
+    expect(fireEvent.pointerDown(editor)).toBe(true);
+    expect(screen.queryByRole('menu', { name: 'Editor actions' })).toBeNull();
   });
 });
 
