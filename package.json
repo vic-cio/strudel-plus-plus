@@ -13,7 +13,7 @@
     "dev": "pnpm --dir app dev",
     "build": "pnpm --dir app build",
     "dist": "pnpm --dir app dist",
-    "test": "pnpm --dir app test",
+    "test": "pnpm --dir app test && node --test scripts/fetch-upstream-artifacts.test.mjs",
     "typecheck": "pnpm --dir app typecheck",
     "lint": "eslint app --quiet",
     "format-check": "prettier --check app scripts *.md *.json *.yaml .github/workflows/ci.yml",

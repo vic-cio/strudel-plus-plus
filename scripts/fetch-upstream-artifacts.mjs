@@ -1,17 +1,20 @@
 import { createHash } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const UPSTREAM_COMMIT = '8f81463b9cb5ddd5f117ed7baef6a1fde9445dc2';
 const UPSTREAM_BASE_URL = `https://codeberg.org/uzu/strudel/raw/commit/${UPSTREAM_COMMIT}`;
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const outputDirectory = resolve(scriptDirectory, '../app/.external/strudel');
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAY_MS = 500;
+const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 // These are the only upstream modules that are not available as published npm
 // packages at the pinned Strudel release. They are fetched individually into a
 // build cache, never copied into this repository or added to its Git history.
-const ARTIFACTS = [
+export const ARTIFACTS = [
   {
     source: 'packages/edo/index.mjs',
     target: 'edo/index.mjs',
@@ -46,6 +49,7 @@ const ARTIFACTS = [
     source: 'packages/dough/dough.mjs',
     target: 'dough/dough.mjs',
     sha256: '0982f0293cbe90dde566c6ba9f6345c63061a859fb791a17a33f4484ed184c0f',
+    outputSha256: '0a48bcef1f209b6e0b8dd131324a84d03ee85b13138fe78b82fe653af2404c00',
   },
   {
     source: 'packages/tidal/tidal.mjs',
@@ -54,41 +58,116 @@ const ARTIFACTS = [
   },
 ];
 
-function sha256(buffer) {
+export function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
-async function fetchArtifact(artifact) {
-  const response = await fetch(`${UPSTREAM_BASE_URL}/${artifact.source}`);
-  if (!response.ok) {
-    throw new Error(`could not fetch ${artifact.source}: ${response.status} ${response.statusText}`);
-  }
-  const contents = Buffer.from(await response.arrayBuffer());
-  const digest = sha256(contents);
-  if (digest !== artifact.sha256) {
-    throw new Error(`checksum mismatch for ${artifact.source}: expected ${artifact.sha256}, got ${digest}`);
-  }
-  if (artifact.target === 'dough/dough.mjs') {
-    const source = contents.toString('utf8');
-    const adapted = source.replace(
-      "import { getAudioContext, ensureMinimalOutput } from '@strudel/webaudio';",
-      "import { getAudioContext } from '@strudel/webaudio';\nimport { ensureMinimalOutput } from '../../../src/renderer/minimalOutput.mjs';",
+function attemptsLabel(attempts) {
+  return `${attempts} attempt${attempts === 1 ? '' : 's'}`;
+}
+
+function cacheDigest(artifact) {
+  return artifact.outputSha256 ?? artifact.sha256;
+}
+
+async function hasValidCache(directory, artifacts) {
+  try {
+    await Promise.all(
+      artifacts.map(async (artifact) => {
+        const contents = await readFile(join(directory, artifact.target));
+        if (sha256(contents) !== cacheDigest(artifact)) {
+          throw new Error(`checksum mismatch for cached ${artifact.target}`);
+        }
+      }),
     );
-    if (adapted === source) {
-      throw new Error(`could not apply the published-webaudio compatibility adapter to ${artifact.source}`);
-    }
-    return { artifact, contents: Buffer.from(adapted) };
+    return true;
+  } catch {
+    return false;
   }
-  return { artifact, contents };
 }
 
-const fetched = await Promise.all(ARTIFACTS.map(fetchArtifact));
-await rm(outputDirectory, { recursive: true, force: true });
+function adaptArtifact(artifact, contents) {
+  if (artifact.target !== 'dough/dough.mjs') return contents;
 
-for (const { artifact, contents } of fetched) {
-  const target = join(outputDirectory, artifact.target);
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, contents);
+  const source = contents.toString('utf8');
+  const adapted = source.replace(
+    "import { getAudioContext, ensureMinimalOutput } from '@strudel/webaudio';",
+    "import { getAudioContext } from '@strudel/webaudio';\nimport { ensureMinimalOutput } from '../../../src/renderer/minimalOutput.mjs';",
+  );
+  if (adapted === source) {
+    throw new Error(`could not apply the published-webaudio compatibility adapter to ${artifact.source}`);
+  }
+  return Buffer.from(adapted);
 }
 
-console.log(`prepared ${fetched.length} pinned upstream modules at ${outputDirectory}`);
+async function fetchArtifact(
+  artifact,
+  {
+    baseUrl = UPSTREAM_BASE_URL,
+    fetchImpl = globalThis.fetch,
+    maxAttempts = DEFAULT_MAX_ATTEMPTS,
+    retryDelayMs = DEFAULT_RETRY_DELAY_MS,
+    sleep = (delay) => new Promise((resolveSleep) => setTimeout(resolveSleep, delay)),
+  } = {},
+) {
+  let lastError;
+  let attemptsMade = 0;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    attemptsMade = attempt;
+    let response;
+    try {
+      response = await fetchImpl(`${baseUrl}/${artifact.source}`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt === maxAttempts) break;
+      await sleep(retryDelayMs * 2 ** (attempt - 1));
+      continue;
+    }
+
+    if (!response.ok) {
+      const reason = `${response.status} ${response.statusText}`.trim();
+      lastError = new Error(`could not fetch ${artifact.source}: ${reason}`);
+      if (!RETRYABLE_STATUSES.has(response.status) || attempt === maxAttempts) break;
+      await sleep(retryDelayMs * 2 ** (attempt - 1));
+      continue;
+    }
+
+    const contents = Buffer.from(await response.arrayBuffer());
+    const digest = sha256(contents);
+    if (digest !== artifact.sha256) {
+      throw new Error(`checksum mismatch for ${artifact.source}: expected ${artifact.sha256}, got ${digest}`);
+    }
+    return { artifact, contents: adaptArtifact(artifact, contents) };
+  }
+
+  throw new Error(
+    `could not fetch ${artifact.source} after ${attemptsLabel(attemptsMade)}: ${lastError?.message ?? 'unknown error'}`,
+  );
+}
+
+export async function prepareArtifacts({
+  outputDirectory: destination = outputDirectory,
+  artifacts = ARTIFACTS,
+  ...fetchOptions
+} = {}) {
+  if (await hasValidCache(destination, artifacts)) {
+    return { source: 'cache', count: artifacts.length };
+  }
+
+  const fetched = await Promise.all(artifacts.map((artifact) => fetchArtifact(artifact, fetchOptions)));
+  await rm(destination, { recursive: true, force: true });
+
+  for (const { artifact, contents } of fetched) {
+    const target = join(destination, artifact.target);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
+
+  return { source: 'network', count: fetched.length };
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  const result = await prepareArtifacts();
+  console.log(`prepared ${result.count} pinned upstream modules from ${result.source} at ${outputDirectory}`);
+}
