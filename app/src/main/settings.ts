@@ -35,5 +35,6 @@ function validateRecordConfig(value: unknown): Settings['recordConfig'] {
     enabled: r.enabled === true,
     mode,
     outputPath: typeof r.outputPath === 'string' ? r.outputPath : undefined,
+    askWhereToSave: r.askWhereToSave === true,
   } as Settings['recordConfig'];
 }

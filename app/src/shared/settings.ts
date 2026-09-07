@@ -8,7 +8,9 @@ export type Settings = {
   version: number;
   sessionsRoot?: string | undefined;
   beatSwitchTiming?: BeatSwitchTiming | undefined;
-  recordConfig?: { enabled: boolean; mode?: RecordingMode; outputPath?: string | undefined } | undefined;
+  recordConfig?:
+    | { enabled: boolean; mode?: RecordingMode; outputPath?: string | undefined; askWhereToSave?: boolean }
+    | undefined;
   closeBehavior?: 'ask' | 'auto-save' | 'discard' | undefined;
 };
 
@@ -16,5 +18,5 @@ export const DEFAULT_SETTINGS: Settings = {
   version: SETTINGS_VERSION,
   beatSwitchTiming: 'next-bar',
   closeBehavior: 'ask',
-  recordConfig: { enabled: false, mode: 'audio' },
+  recordConfig: { enabled: false, mode: 'audio', askWhereToSave: false },
 };

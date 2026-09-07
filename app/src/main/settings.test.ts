@@ -21,4 +21,17 @@ describe('settings contract', () => {
     expect(s.sessionsRoot).toBe('/existing/folder');
     // Root must not be silently moved/copied; this validates the contract.
   });
+  it('defaults the save dialog off and keeps an explicit on', () => {
+    expect(validateSettings({ version: 1 }).recordConfig?.askWhereToSave).toBe(false);
+    expect(
+      validateSettings({ version: 1, recordConfig: { enabled: false, mode: 'audio', askWhereToSave: true } })
+        .recordConfig?.askWhereToSave,
+    ).toBe(true);
+  });
+  it('ignores a corrupt save-dialog value', () => {
+    expect(
+      validateSettings({ version: 1, recordConfig: { enabled: false, mode: 'audio', askWhereToSave: 'yes' } })
+        .recordConfig?.askWhereToSave,
+    ).toBe(false);
+  });
 });

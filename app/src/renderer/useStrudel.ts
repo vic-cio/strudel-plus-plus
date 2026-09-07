@@ -241,6 +241,31 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     chosenCps.current = undefined;
   }, []);
 
+  /**
+   * Live transport position in cycles, for phase-aligned switching.
+   *
+   * The scheduler's `now()` is the single clock the sound already follows:
+   * its fractional part is the phase within the current bar. Undefined when
+   * the editor is absent, the scheduler has no clock, or playback is
+   * stopped — callers fall back to a fixed interval there (a no-op for
+   * reevaluate while stopped).
+   */
+  const getTransportNow = useCallback((): number | undefined => {
+    const scheduler = editorRef.current?.repl.scheduler as { now?: () => number; started?: boolean } | undefined;
+    if (!scheduler || typeof scheduler.now !== 'function') {
+      return undefined;
+    }
+    if (scheduler.started === false) {
+      return undefined;
+    }
+    try {
+      const now = scheduler.now();
+      return Number.isFinite(now) ? now : undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
   return {
     containerRef,
     state,
@@ -256,5 +281,6 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     cps,
     changeCps,
     releaseCps,
+    getTransportNow,
   };
 }

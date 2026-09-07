@@ -191,6 +191,26 @@ export function SettingsPage({ onBack, onSettingsChange }: Props) {
                     <p className="settings-note">
                       The record control in the titlebar takes the master mix live; MP4 adds a title card.
                     </p>
+                    <label className="settings-row">
+                      <span className="settings-label">ask where to save each recording</span>
+                      <input
+                        type="checkbox"
+                        aria-label="Ask where to save each recording"
+                        checked={settings.recordConfig?.askWhereToSave === true}
+                        onChange={(event) =>
+                          void update({
+                            recordConfig: {
+                              enabled: settings.recordConfig?.enabled ?? false,
+                              ...settings.recordConfig,
+                              askWhereToSave: event.target.checked,
+                            },
+                          })
+                        }
+                      />
+                    </label>
+                    <p className="settings-note">
+                      Off saves automatically into recordings inside the sessions folder. On shows the save dialog.
+                    </p>
                   </section>
                 )}
 
