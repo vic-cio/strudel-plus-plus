@@ -6,4 +6,12 @@ declare global {
   }
 }
 
-export const desktop = window.desktop;
+export const desktop = new Proxy({} as DesktopApi, {
+  get(_, prop) {
+    if (typeof window === 'undefined' || !window.desktop) {
+      throw new Error('desktop API not available');
+    }
+    const val = (window.desktop as any)[prop];
+    return typeof val === 'function' ? val.bind(window.desktop) : val;
+  },
+});
