@@ -98,32 +98,274 @@ button:disabled {
   cursor: default;
 }
 
-.settings-popover {
+/* Settings (overlay page) ------------------------------------------------ */
+
+/*
+  A full-viewport page ON TOP of the live app: the editor, the sound, and
+  the plugin state all keep running underneath, so a round trip through
+  Settings cannot cost the buffer or the beat. Same grammar as the picker —
+  sunk head strip, hairlines, hatch, no radius, no shadow.
+*/
+.settings-overlay {
   position: fixed;
-  top: 38px;
-  right: 12px;
-  z-index: 5;
+  inset: 0;
+  z-index: 60;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-width: 250px;
-  padding: 12px;
+  background: var(--ground);
+  background-image: var(--hatch);
+}
+/* The overlay covers the app's drag strip, so it carries its own. */
+.settings-drag {
+  -webkit-app-region: drag;
+  flex: none;
+  height: 34px;
+}
+.settings-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0 14px 14px;
   border: 1px solid var(--line-strong);
+  background: var(--ground);
+}
+.settings-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: none;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
   background: var(--ground-sunk);
   background-image: var(--hatch);
 }
-.settings-popover label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.settings-mark {
+  font-size: 15px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.settings-sub {
+  flex: 1;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.settings-content {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+}
+.settings-side {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0;
+  border-right: 1px solid var(--line);
+  background: var(--ground-sunk);
+  background-image: var(--hatch);
+}
+.settings-cat {
+  display: block;
+  width: 100%;
+  padding: 5px 12px;
+  text-align: left;
+  border: none;
   color: var(--ink-soft);
 }
-.settings-popover select {
+.settings-cat:hover:not(:disabled) {
+  background: var(--ground-raised);
+  border: none;
+  color: var(--ink);
+}
+.settings-cat[aria-current] {
+  background: var(--ground-raised);
+  color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--gold);
+  border: none;
+}
+.settings-body {
+  min-width: 0;
+  overflow: auto;
+  padding: 18px 22px;
+}
+.settings-section h3 {
+  margin: 0 0 14px;
+  font-size: 10px;
+  font-weight: normal;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 10px;
+  color: var(--ink-soft);
+}
+.settings-label {
+  flex: none;
+  width: 150px;
+  font-size: 11px;
+}
+.settings-section select {
   font: inherit;
   color: var(--ink);
   background: var(--ground-input);
   border: 1px solid var(--line);
-  padding: 3px;
+  padding: 3px 6px;
+  outline: none;
+}
+.settings-section select:focus {
+  border-color: var(--gold);
+}
+.settings-note,
+.settings-hint {
+  color: var(--ink-faint);
+}
+.settings-note {
+  max-width: 52ch;
+  margin: 8px 0 0;
+  font-size: 11px;
+}
+.settings-hint {
+  font-size: 10px;
+}
+.settings-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.settings-error {
+  color: var(--rust);
+  font-size: 11px;
+}
+.settings-section .settings-error {
+  margin: 6px 0 0;
+}
+.settings-empty {
+  color: var(--ink-faint);
+}
+.settings-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--ground-sunk);
+}
+.settings-foot .settings-error {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-foot .settings-hint {
+  flex: 1;
+}
+.settings-saved {
+  color: var(--olive);
+}
+.settings-pending {
+  color: var(--ink-faint);
+}
+
+/* Close protection -------------------------------------------------------- */
+
+/* The close decision is the app's own dialog; the backdrop keeps the live
+   app visible behind it so what is at stake stays on screen. */
+.close-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(34, 17, 9, 0.55);
+}
+.close-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 86vw);
+  border: 1px solid var(--line-strong);
+  background: var(--ground);
+  background-image: var(--hatch);
+  box-shadow: 8px 8px 0 rgba(34, 17, 9, 0.25);
+}
+.close-head {
+  flex: none;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ground-sunk);
+  color: var(--ink);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.close-body {
+  padding: 12px;
+  color: var(--ink-soft);
+}
+.close-body p {
+  margin: 0;
+}
+.close-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.close-list li {
+  padding: 1px 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.close-failures {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+}
+.close-failures-title {
+  color: var(--ink-faint);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.close-failure {
+  color: var(--rust);
+}
+.close-failure .reason {
+  color: var(--ink-faint);
+}
+.close-busy {
+  margin-top: 10px;
+  color: var(--gold);
+}
+.close-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--ground-sunk);
+}
+.close-spacer {
+  flex: 1;
+}
+
+/* Record control ----------------------------------------------------------- */
+
+/* Sits in the titlebar transport beside play; the rust dot is the take. */
+.record-control {
+  display: inline-flex;
+}
+.record-control button[data-recording='true'] {
+  color: var(--rust);
 }
 
 .tempo {
