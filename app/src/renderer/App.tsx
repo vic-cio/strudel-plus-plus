@@ -72,6 +72,14 @@ function usePaneWidth(key: string, fallback: number) {
   return [width, setWidth] as const;
 }
 
+const DOCK_MIN = 56;
+const DOCK_DEFAULT = 104;
+/** Titlebar 34 + dock grip 5 + status bar 22, plus the least room the panes
+ *  row keeps for the editor and the harness. */
+const DOCK_CHROME = 34 + 5 + 22 + 160;
+
+const dockMaxFor = (windowHeight: number) => Math.max(DOCK_MIN, windowHeight - DOCK_CHROME);
+
 function sameOrder(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((name, index) => name === right[index]);
 }
@@ -94,6 +102,10 @@ export function App() {
   const [termWidth, setTermWidth] = usePaneWidth('pane.term', 460);
   const [treeOpen, setTreeOpen] = usePaneWidth('pane.treeOpen', 1);
   const [termOpen, setTermOpen] = usePaneWidth('pane.termOpen', 1);
+  // Dock height: same restart-surviving preference as the pane widths. The
+  // clamp is applied against the live window height, not a fixed guess.
+  const [dockHeight, setDockHeight] = usePaneWidth('pane.dock', DOCK_DEFAULT);
+  const [windowHeight, setWindowHeight] = useState(() => window.innerHeight);
 
   // The close decision, as the app's own dialog. `closeAsk` holds the panel
   // state (a failed save-all keeps it open with the failures listed);
@@ -123,9 +135,6 @@ export function App() {
   );
   const [recordMode, setRecordMode] = useState<RecordingMode>('audio');
   const [closeBehavior, setCloseBehavior] = useState(DEFAULT_SETTINGS.closeBehavior);
-  // The close decision, as the app's own dialog. `closeAsk` holds the panel
-  // state (a failed save-all keeps it open with the failures listed);
-  // `closeSaving` is the busy flag while writes are in flight.
 
   useEffect(() => {
     desktop.settings.load().then((s) => {
@@ -1146,6 +1155,27 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [beginTreeDraft, save, showSettings, toggle]);
 
+  // The dock clamp follows the Electron window as it is resized.
+  useEffect(() => {
+    const onResize = () => setWindowHeight(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // A stored height that no longer fits the current window is clamped at
+  // view time; the stored preference itself is left alone, so enlarging the
+  // window brings the captain's chosen height back.
+  const dockMax = dockMaxFor(windowHeight);
+  const dockH = Math.min(Math.max(dockHeight, DOCK_MIN), dockMax);
+  const onDockHeightChange = useCallback(
+    (next: number) => {
+      if (next !== dockH) {
+        setDockHeight(next);
+      }
+    },
+    [dockH, setDockHeight],
+  );
+
   const openEditorMenu = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -1254,7 +1284,7 @@ export function App() {
 
   return (
     <>
-      <div className="app">
+      <div className="app" style={{ '--dock-h': `${dockH}px` } as CSSProperties}>
         <header className="titlebar">
           <button
             className="collapse"
@@ -1405,6 +1435,18 @@ export function App() {
             <HarnessPane harnesses={harnesses} active={harness} onPick={setHarness} beat={open} />
           )}
         </div>
+
+        {/* The dock's height is the grid's --dock-h row; this grip drags it. */}
+        <Grip
+          orientation="horizontal"
+          size={dockH}
+          onChange={onDockHeightChange}
+          side="below"
+          min={DOCK_MIN}
+          max={dockMax}
+          resetTo={DOCK_DEFAULT}
+          label="Resize plugin dock"
+        />
 
         <PluginDock
           dock={dock}
