@@ -72,9 +72,6 @@ function usePaneWidth(key: string, fallback: number) {
   return [width, setWidth] as const;
 }
 
-/** Dock height bounds. The floor keeps the tab strip plus a sliver of body
- *  visible; the ceiling is computed from the live window height so a tall
- *  dock can never starve the editor and harness rows above it. */
 const DOCK_MIN = 56;
 const DOCK_DEFAULT = 104;
 /** Titlebar 34 + dock grip 5 + status bar 22, plus the least room the panes
@@ -109,6 +106,12 @@ export function App() {
   // clamp is applied against the live window height, not a fixed guess.
   const [dockHeight, setDockHeight] = usePaneWidth('pane.dock', DOCK_DEFAULT);
   const [windowHeight, setWindowHeight] = useState(() => window.innerHeight);
+
+  // The close decision, as the app's own dialog. `closeAsk` holds the panel
+  // state (a failed save-all keeps it open with the failures listed);
+  // `closeSaving` is the busy flag while writes are in flight.
+  const [closeAsk, setCloseAsk] = useState<{ failures: CloseFailure[] } | undefined>(undefined);
+  const [closeSaving, setCloseSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [cpsByBeat, setCpsByBeat] = useState<Record<string, number>>({});
   const [draftState, setDraftState] = useState<DraftState>({});
@@ -116,6 +119,11 @@ export function App() {
   // each device's own faders. Session-scoped like the tempo map — switching
   // beats must not close the mixer.
   const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
+  // The app-level overlay every floating plugin panel lives in: one
+  // coordinate space spanning the whole app surface (beats sidebar, editor,
+  // harness, dock), so panels drag across panes instead of being clamped
+  // inside the editor viewport.
+  const [appOverlay, setAppOverlay] = useState<HTMLDivElement | null>(null);
   const [editorViewport, setEditorViewport] = useState<HTMLDivElement | null>(null);
   const [editorMenu, setEditorMenu] = useState<{
     menu: EditorMenuState;
@@ -127,11 +135,6 @@ export function App() {
   );
   const [recordMode, setRecordMode] = useState<RecordingMode>('audio');
   const [closeBehavior, setCloseBehavior] = useState(DEFAULT_SETTINGS.closeBehavior);
-  // The close decision, as the app's own dialog. `closeAsk` holds the panel
-  // state (a failed save-all keeps it open with the failures listed);
-  // `closeSaving` is the busy flag while writes are in flight.
-  const [closeAsk, setCloseAsk] = useState<{ failures: CloseFailure[] } | undefined>(undefined);
-  const [closeSaving, setCloseSaving] = useState(false);
 
   useEffect(() => {
     desktop.settings.load().then((s) => {
@@ -1180,7 +1183,14 @@ export function App() {
       const source = getCode() ?? bufferRef.current;
       const target = token ? resolveFunctionPluginTarget(source, token.offset, listFunctionPlugins()) : undefined;
       const bounds = event.currentTarget.getBoundingClientRect();
-      const menu: EditorMenuState = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+      const menu: EditorMenuState = {
+        x: event.clientX - bounds.left,
+        y: event.clientY - bounds.top,
+        // The raw client point too: a spawned floating panel is born in the
+        // app overlay's coordinate space, not the editor viewport's.
+        clientX: event.clientX,
+        clientY: event.clientY,
+      };
       if (target) menu.functionName = target.functionName;
       setEditorMenu(target ? { menu, target } : { menu });
     },
@@ -1191,20 +1201,23 @@ export function App() {
     (functionName: string) => {
       const currentMenu = editorMenu;
       const beat = openRef.current;
-      if (!currentMenu?.target || currentMenu.target.functionName !== functionName || !beat || !editorViewport) return;
+      if (!currentMenu?.target || currentMenu.target.functionName !== functionName || !beat || !appOverlay) return;
+      // The panel is born in the overlay's coordinate space, at the point the
+      // context menu was raised — translated from the click's client position.
+      const overlayBounds = appOverlay.getBoundingClientRect();
       const instance = createFunctionPluginInstance({
         beat,
         target: currentMenu.target,
-        x: currentMenu.menu.x,
-        y: currentMenu.menu.y,
-        viewport: { width: editorViewport.offsetWidth, height: editorViewport.offsetHeight },
+        x: (currentMenu.menu.clientX ?? currentMenu.menu.x) - overlayBounds.left,
+        y: (currentMenu.menu.clientY ?? currentMenu.menu.y) - overlayBounds.top,
+        viewport: { width: appOverlay.offsetWidth, height: appOverlay.offsetHeight },
       });
       const next = functionPluginsRef.current.filter((candidate) => candidate.instanceId !== instance.instanceId);
       next.push(instance);
       functionPluginsRef.current = next;
       setFunctionPlugins(next);
     },
-    [editorMenu, editorViewport],
+    [appOverlay, editorMenu],
   );
 
   const changeFunctionPluginValue = useCallback(
@@ -1439,7 +1452,7 @@ export function App() {
           dock={dock}
           onChange={setDock}
           playing={state.started}
-          floatingRoot={editorViewport}
+          floatingRoot={appOverlay}
           functionPlugins={{
             instances: functionPlugins,
             onChange: changeFunctionPlugins,
@@ -1457,6 +1470,11 @@ export function App() {
           error={state.error?.message}
           recordingMode={recordMode}
         />
+
+        {/* Floating plugin panels render here via portal: one absolutely
+          positioned layer over the whole app. It never intercepts the pointer
+          itself (pointer-events: none); only the panels inside it do. */}
+        <div className="app-overlay" ref={setAppOverlay} />
       </div>
       {settingsOverlay}
       {closeAsk !== undefined && (

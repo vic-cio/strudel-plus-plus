@@ -31,7 +31,7 @@ describe('GainControl', () => {
     const onState = vi.fn();
     render(<GainControl state={{ value: 0.4 }} onState={onState} playing={true} />);
 
-    const input = screen.getByRole('slider', { name: 'Gain' });
+    const input = screen.getByRole('slider', { name: 'Trim' });
     if (!(input instanceof HTMLInputElement)) {
       throw new Error('gain control did not render a range input');
     }
@@ -50,8 +50,8 @@ describe('GainControl', () => {
     resolveController.mockReturnValue(undefined);
     render(<GainControl state={undefined} onState={vi.fn()} playing={true} />);
 
-    expect((await screen.findByRole('alert')).textContent).toBe('[ gain unavailable: live audio output is not ready ]');
-    const input = screen.getByRole('slider', { name: 'Gain' });
+    expect((await screen.findByRole('alert')).textContent).toBe('[ trim unavailable: live audio output is not ready ]');
+    const input = screen.getByRole('slider', { name: 'Trim' });
     if (!(input instanceof HTMLInputElement)) {
       throw new Error('gain control did not render a range input');
     }
@@ -64,7 +64,7 @@ describe('GainControl', () => {
     render(<GainControl state={undefined} onState={onState} playing={true} />);
 
     await screen.findByRole('alert');
-    const input = screen.getByRole('slider', { name: 'Gain' });
+    const input = screen.getByRole('slider', { name: 'Trim' });
     if (!(input instanceof HTMLInputElement)) {
       throw new Error('gain control did not render a range input');
     }

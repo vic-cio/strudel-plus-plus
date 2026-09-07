@@ -923,7 +923,7 @@ describe('editor context menu', () => {
 
     fireEvent.contextMenu(document.querySelector('.editor')!, { clientX: 120, clientY: 90 });
     await user.click(screen.getByRole('menuitem', { name: 'Spawn floating gain plugin' }));
-    expect(document.querySelector('.editor-viewport > .function-floating-panel')).toBeTruthy();
+    expect(document.querySelector('.app-overlay > .function-floating-panel')).toBeTruthy();
 
     fireEvent.change(screen.getByRole('slider', { name: 'Function gain' }), { target: { value: '0.75' } });
     expect(repl.setCode).toHaveBeenLastCalledWith('s("bd").gain(0.75)');

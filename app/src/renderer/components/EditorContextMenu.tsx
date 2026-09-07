@@ -3,6 +3,11 @@ import { useEffect, useRef } from 'react';
 export type EditorMenuState = {
   x: number;
   y: number;
+  /** Where the menu was raised, in client (viewport) coordinates. A spawned
+   *  floating panel lives in the app overlay's coordinate space, so its spawn
+   *  point is translated from these, not from the editor-relative x/y. */
+  clientX?: number;
+  clientY?: number;
   functionName?: string;
 };
 

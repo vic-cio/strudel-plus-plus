@@ -23,6 +23,8 @@
   --rust: #e2643c;
   --gold: #e0a83c;
   --olive: #adb56d;
+  /* Pale-yellow wash for the dock's drag-over drop target. */
+  --drop-tint: rgba(224, 168, 60, 0.2);
 
   --mono: 'Berkeley Mono', 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
 
@@ -55,6 +57,7 @@
   --rust: #a8432a;
   --gold: #8a6a12;
   --olive: #56603a;
+  --drop-tint: rgba(138, 106, 18, 0.15);
   --texture: 0.02;
 }
 
@@ -566,6 +569,9 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
   background: var(--ground);
+  /* The app-level overlay (floating plugin panels) is positioned against
+     the app box. */
+  position: relative;
 }
 
 .titlebar {
@@ -1067,7 +1073,9 @@ body[data-resizing='true'][data-resize-axis='row'] {
   position: absolute;
   top: calc(100% + 2px);
   left: 0;
-  z-index: 40;
+  /* Above the app overlay's floating panels (z 60) so the menu is never
+     hidden behind a panel resting on the dock. */
+  z-index: 70;
   min-width: 110px;
   display: flex;
   flex-direction: column;
@@ -1246,6 +1254,17 @@ body[data-resizing='true'][data-resize-axis='row'] {
   overflow: hidden;
   position: relative;
 }
+/* The floating header's close mark: same shape as a tab's close notch, so
+   the two ways of closing a panel read as one gesture. */
+.floating-close {
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1;
+  padding: 0 3px;
+}
+.floating-close:hover {
+  color: var(--rust);
+}
 .dock-tab-float {
   font-size: 10px;
   color: var(--ink-faint);
@@ -1253,4 +1272,35 @@ body[data-resizing='true'][data-resize-axis='row'] {
 }
 .dock-tab-float:hover {
   color: var(--ink);
+}
+
+/* The app-level layer floating panels live in. It spans the whole app
+   surface — beats sidebar, editor, harness pane, dock — so a panel drags
+   across panes instead of being clamped to the editor. The layer itself
+   never takes the pointer; only the panels inside it do. */
+.app-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+.app-overlay .floating-panel {
+  pointer-events: auto;
+}
+
+/* While a dragged panel's pointer is over the dock, the whole dock becomes
+   the drop target: a pale-yellow wash over everything inside it and a bold
+   gold frame around it. The wash is a pseudo-element so it tints the tab
+   strip and pane bodies alike without touching their own backgrounds. */
+.dock.dock-drop-target {
+  outline: 2px solid var(--gold);
+  outline-offset: -2px;
+}
+.dock.dock-drop-target::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--drop-tint);
 }
