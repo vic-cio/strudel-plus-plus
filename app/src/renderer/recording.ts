@@ -79,10 +79,16 @@ export function startRecording(mode: RecordingMode, source: string): RecordingCa
     if (event.data.size > 0) chunks.push(event.data);
   };
   recorder.start();
+  // The take's stop is shared: RecordControl awaits it for its own timer and
+  // state, and the app-side export awaits the same take to hand the blob to
+  // the main process. Calling MediaRecorder.stop() a second time on an
+  // inactive recorder throws, so every waiter must observe one underlying
+  // stop instead of each triggering its own.
+  let stopped: Promise<Blob> | undefined;
   return {
     extension: intent.extension,
-    stop: () =>
-      new Promise<Blob>((resolve, reject) => {
+    stop: () => {
+      stopped ??= new Promise<Blob>((resolve, reject) => {
         recorder.onstop = () => {
           surface.release();
           resolve(new Blob(chunks, { type: intent.mimeType }));
@@ -92,6 +98,8 @@ export function startRecording(mode: RecordingMode, source: string): RecordingCa
           reject(new Error('The recorder stopped unexpectedly.'));
         };
         recorder.stop();
-      }),
+      });
+      return stopped;
+    },
   };
 }

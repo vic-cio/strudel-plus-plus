@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { App } from './App';
+import type { Settings } from '../shared/settings';
 
 // Minimal in-memory localStorage for the jsdom environment that does not provide it.
 if (typeof (globalThis as any).localStorage === 'undefined') {
@@ -83,9 +84,16 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
   };
   const desktop = {
     settings: {
-      load: vi.fn(async () => ({ version: 1 })),
+      load: vi.fn(async () => ({ version: 1 }) as Settings),
       save: vi.fn(async () => {}),
-      update: vi.fn(async () => ({ version: 1 })),
+      update: vi.fn(async (partial: Partial<Settings>) => ({ version: 1, ...partial }) as Settings),
+    },
+    close: {
+      check: vi.fn(async () => ({ dirty: false })),
+      reportDirty: vi.fn(),
+    },
+    recording: {
+      save: vi.fn(async (_data: Uint8Array, _suggestedName: string) => '/sessions-root/strudel-take.webm'),
     },
     sessions: {
       root: vi.fn(async () => '/sessions-root'),
@@ -112,6 +120,7 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
       ]),
       read: vi.fn(async (name: string) => `// ${name}`),
       write: vi.fn(async () => {}),
+      writeIn: vi.fn(async () => {}),
       create: vi.fn(async () => {}),
       rename: vi.fn(async () => {}),
       remove: vi.fn(async () => {}),
@@ -1155,5 +1164,384 @@ describe('App dock resize', () => {
 
     expect(dockH()).toBe('120px');
     expect(localStorage.getItem('pane.dock')).toBe('120');
+  });
+});
+
+// The recording seam is mocked so a take can complete in jsdom; the control,
+// the export path, and the failure surfaces are what these tests exercise.
+vi.mock('./recording', () => ({
+  startRecording: vi.fn(() => ({
+    extension: 'webm',
+    stop: async () => new Blob(['take']),
+  })),
+}));
+
+describe('App settings overlay', () => {
+  /** Deliver an editor edit exactly as the polled buffer would. */
+  async function editOpenBeat(content: string): Promise<void> {
+    await act(async () => {
+      codeChange.current?.(content);
+    });
+  }
+
+  beforeEach(() => {
+    desktop.settings.load.mockResolvedValue({ version: 1 });
+    desktop.settings.update.mockClear();
+  });
+
+  it('preserves the live editor and the dirty marker across a Settings round trip', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editOpenBeat('// draft kept through settings');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
+    );
+    repl.setCode.mockClear();
+
+    await user.click(screen.getByTitle('Settings'));
+
+    // The settings page is on top; the app underneath never unmounted, so
+    // the editor was never reseeded with "// loading" and the sound kept its
+    // scheduler. What was dirty stays dirty.
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
+    expect(document.querySelector('.editor')).not.toBeNull();
+    expect(repl.setCode).not.toHaveBeenCalledWith('// loading');
+
+    await user.click(screen.getByRole('button', { name: /back/ }));
+
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    expect(document.querySelector('.editor')).not.toBeNull();
+    expect(repl.setCode).not.toHaveBeenCalledWith('// loading');
+    expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true');
+  });
+
+  it('applies a recording mode change to the titlebar record control live', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    expect(screen.getByText('● record audio')).toBeTruthy();
+
+    await user.click(screen.getByTitle('Settings'));
+    fireEvent.change(screen.getByLabelText('Record button action'), { target: { value: 'mp4' } });
+
+    await waitFor(() => expect(screen.getByText('● record mp4')).toBeTruthy());
+    expect(desktop.settings.update).toHaveBeenCalledWith({
+      recordConfig: expect.objectContaining({ mode: 'mp4' }),
+    });
+  });
+
+  it('persists the sidebar latency choice so Settings and the dropdown agree', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Audio switch latency' }), {
+      target: { value: 'immediate' },
+    });
+
+    await waitFor(() => expect(desktop.settings.update).toHaveBeenCalledWith({ beatSwitchTiming: 'immediate' }));
+  });
+});
+
+describe('App close protection', () => {
+  let closeSpy: MockInstance<typeof window.close>;
+
+  beforeEach(() => {
+    closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {});
+    desktop.settings.load.mockResolvedValue({ version: 1 });
+    desktop.beats.write.mockClear();
+    desktop.beats.writeIn.mockClear();
+    desktop.close.reportDirty.mockClear();
+    repl.setCode.mockClear();
+  });
+
+  afterEach(() => {
+    closeSpy.mockRestore();
+  });
+
+  /** The window's close attempt, exactly as Electron delivers it, run
+   *  through act so the close-decision state it schedules is flushed. */
+  async function attemptClose(): Promise<BeforeUnloadEvent> {
+    const event = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    await act(async () => {
+      window.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  /** Deliver an editor edit exactly as the polled buffer would. */
+  async function editOpenBeat(content: string): Promise<void> {
+    await act(async () => {
+      codeChange.current?.(content);
+    });
+  }
+
+  async function dirtyDraft(user: ReturnType<typeof userEvent.setup>, content: string): Promise<void> {
+    await openSessionFromPicker(user);
+    await editOpenBeat(content);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'we begin.js' }).getAttribute('data-dirty')).toBe('true'),
+    );
+  }
+
+  it('asks with save all, discard, and cancel when drafts are dirty', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await dirtyDraft(user, '// draft at stake');
+
+    const event = await attemptClose();
+
+    expect(event.defaultPrevented).toBe(true);
+    const dialog = screen.getByRole('dialog', { name: 'Unsaved beats' });
+    expect(within(dialog).getByRole('button', { name: 'save all' })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'discard' })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'cancel' })).toBeTruthy();
+    // The stakes are named, not counted.
+    expect(within(dialog).getByText('we cook / we begin.js')).toBeTruthy();
+  });
+
+  it('cancel keeps everything open and still guarded', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await dirtyDraft(user, '// draft stays');
+    await attemptClose();
+    await user.click(screen.getByRole('button', { name: 'cancel' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Unsaved beats' })).toBeNull();
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    // The guard itself is undimmed: closing again still asks.
+    const again = await attemptClose();
+    expect(again.defaultPrevented).toBe(true);
+    expect(screen.getByRole('dialog', { name: 'Unsaved beats' })).toBeTruthy();
+  });
+
+  it('discard lets the close through, and the second beforeunload passes', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await dirtyDraft(user, '// draft dropped by choice');
+    await attemptClose();
+    await user.click(screen.getByRole('button', { name: 'discard' }));
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(desktop.close.reportDirty).toHaveBeenCalledWith(false);
+
+    // window.close() re-enters beforeunload; the confirmed choice must stand
+    // down, or the close button would still do nothing.
+    const again = await attemptClose();
+    expect(again.defaultPrevented).toBe(false);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('save all writes every dirty draft of the session and lets the close through', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editOpenBeat('// draft one');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+    await editOpenBeat('// draft two');
+
+    await attemptClose();
+    await user.click(screen.getByRole('button', { name: 'save all' }));
+
+    await waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+    expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// draft one');
+    expect(desktop.beats.write).toHaveBeenCalledWith('808ing.js', '// draft two');
+    expect(desktop.close.reportDirty).toHaveBeenCalledWith(false);
+
+    const again = await attemptClose();
+    expect(again.defaultPrevented).toBe(false);
+  });
+
+  it('a failed write keeps the app open with the failure visible', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await dirtyDraft(user, '// draft that cannot land');
+    desktop.beats.write.mockRejectedValueOnce(new Error('disk full'));
+
+    await attemptClose();
+    await user.click(screen.getByRole('button', { name: 'save all' }));
+
+    expect(await screen.findByText('disk full')).toBeTruthy();
+    expect(screen.getByText('not saved:')).toBeTruthy();
+    expect(closeSpy).not.toHaveBeenCalled();
+    // The dialog stays up with the reasons, ready to retry or cancel.
+    expect(screen.getByRole('dialog', { name: 'Unsaved beats' })).toBeTruthy();
+  });
+
+  it('a conflict is reported and never overwritten on the way out', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editOpenBeat('// draft for we begin');
+    await user.click(screen.getByRole('button', { name: '808ing.js' }));
+
+    // The harness rewrites the dirty beat on disk; the sync rule marks a
+    // conflict instead of adopting or dropping either side.
+    desktop.beats.read.mockResolvedValueOnce('// harness edit');
+    await waitFor(() => expect(changeHandler.current).toBeDefined());
+    await changeHandler.current!({ name: 'we begin.js', event: 'change' });
+
+    await attemptClose();
+    await user.click(screen.getByRole('button', { name: 'save all' }));
+
+    expect(await screen.findByText(/changed on disk while you were editing/)).toBeTruthy();
+    expect(desktop.beats.write).not.toHaveBeenCalledWith('we begin.js', expect.anything());
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+
+  it('auto-save writes safely and closes without asking', async () => {
+    desktop.settings.load.mockResolvedValue({ version: 1, closeBehavior: 'auto-save' });
+    const user = userEvent.setup();
+    render(<App />);
+    await dirtyDraft(user, '// auto-saved on close');
+
+    const event = await attemptClose();
+
+    // The close is held while the writes land, but no dialog interrupts.
+    expect(event.defaultPrevented).toBe(true);
+    await waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+    expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// auto-saved on close');
+    expect(screen.queryByRole('dialog', { name: 'Unsaved beats' })).toBeNull();
+
+    const again = await attemptClose();
+    expect(again.defaultPrevented).toBe(false);
+  });
+
+  it('auto-save keeps the app open with the failure visible when a write fails', async () => {
+    desktop.settings.load.mockResolvedValue({ version: 1, closeBehavior: 'auto-save' });
+    const user = userEvent.setup();
+    render(<App />);
+    await dirtyDraft(user, '// draft that cannot land');
+    desktop.beats.write.mockRejectedValueOnce(new Error('disk full'));
+
+    await attemptClose();
+
+    expect(await screen.findByText('disk full')).toBeTruthy();
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Unsaved beats' })).toBeTruthy();
+  });
+
+  it('discard behavior closes immediately, without a dialog', async () => {
+    desktop.settings.load.mockResolvedValue({ version: 1, closeBehavior: 'discard' });
+    const user = userEvent.setup();
+    render(<App />);
+    await dirtyDraft(user, '// deliberately lost');
+
+    const event = await attemptClose();
+
+    // The window closes on its own; the app only stands down.
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.queryByRole('dialog', { name: 'Unsaved beats' })).toBeNull();
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+
+  it('a clean app closes with no dialog at all', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const event = await attemptClose();
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.queryByRole('dialog', { name: 'Unsaved beats' })).toBeNull();
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+
+  it("saves another session's leftover draft through the named-session seam", async () => {
+    // The draft left in "we cook" when the app moved to "other" must be
+    // written into we cook's folder — not into the active session's files.
+    desktop.sessions.list.mockResolvedValue([
+      { name: 'we cook', beats: 2, usedAt: 2 },
+      { name: 'other', beats: 2, usedAt: 1 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+    await editOpenBeat('// draft in we cook');
+
+    await user.click(screen.getByTitle('Switch session'));
+    await user.click(screen.getByText('other'));
+    await waitFor(() => expect(screen.getByTitle('Switch session').textContent).toBe('other'));
+    await editOpenBeat('// draft in other');
+
+    await attemptClose();
+    const dialog = screen.getByRole('dialog', { name: 'Unsaved beats' });
+    expect(within(dialog).getByText('we cook / we begin.js')).toBeTruthy();
+    expect(within(dialog).getByText('other / we begin.js')).toBeTruthy();
+
+    await user.click(within(dialog).getByRole('button', { name: 'save all' }));
+
+    await waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+    expect(desktop.beats.writeIn).toHaveBeenCalledWith('we cook', 'we begin.js', '// draft in we cook');
+    expect(desktop.beats.write).toHaveBeenCalledWith('we begin.js', '// draft in other');
+    expect(desktop.beats.write).not.toHaveBeenCalledWith('we begin.js', '// draft in we cook');
+  });
+});
+
+describe('App record control', () => {
+  beforeEach(() => {
+    desktop.settings.load.mockResolvedValue({ version: 1 });
+    desktop.recording.save.mockClear();
+    repl.setCode.mockClear();
+  });
+
+  it('shows one record control in the titlebar, driven by the persisted mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    const control = document.querySelector('.titlebar .record-control');
+    expect(control).not.toBeNull();
+    expect(screen.getByText('● record audio')).toBeTruthy();
+    // One control, not one per surface: the status bar shows the mode as
+    // text, never a second button.
+    expect(document.querySelectorAll('.record-control')).toHaveLength(1);
+  });
+
+  it('follows a persisted mp4 mode from the settings store', async () => {
+    desktop.settings.load.mockResolvedValue({ version: 1, recordConfig: { enabled: false, mode: 'mp4' } });
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    expect(screen.getByText('● record mp4')).toBeTruthy();
+    expect(screen.getByText('rec: mp4')).toBeTruthy();
+  });
+
+  it('fails visibly when there is no live master mix to take', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    await user.click(screen.getByRole('button', { name: 'Start recording' }));
+
+    // The failure lands on the app's error surface, spelled out, not a silent
+    // no-op button.
+    expect(await screen.findByText(/Recording failed/)).toBeTruthy();
+    expect(screen.getByText(/No live master audio/)).toBeTruthy();
+    // Nothing was recorded and nothing was exported.
+    expect(desktop.recording.save).not.toHaveBeenCalled();
+  });
+
+  it('records the master mix and exports the take through the save path', async () => {
+    const view = render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+    // Playback is running: the master tap exists for the take. The state
+    // lives in the hook, so the app must re-render to see it.
+    repl.state = { started: true, error: undefined };
+    view.rerender(<App />);
+    await user.click(screen.getByRole('button', { name: 'Start recording' }));
+
+    await user.click(screen.getByRole('button', { name: 'Stop recording' }));
+
+    await waitFor(() => expect(desktop.recording.save).toHaveBeenCalledTimes(1));
+    const [data, suggested] = vi.mocked(desktop.recording.save).mock.calls[0]!;
+    expect(new TextDecoder().decode(data)).toBe('take');
+    expect(suggested).toMatch(/^strudel-we begin-.*\.webm$/);
+    // A clean take leaves no failure behind on the error surface.
+    expect(screen.queryByText(/Recording failed/)).toBeNull();
   });
 });

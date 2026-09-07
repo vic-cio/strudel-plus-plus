@@ -85,6 +85,7 @@ export function RecordControl({ mode, source, masterAvailable, onEvent }: Record
       <button
         onClick={recording ? stop : start}
         disabled={recording && timerSec === null}
+        data-recording={recording || undefined}
         aria-label={recording ? 'Stop recording' : 'Start recording'}
       >
         {recording ? `■ stop (${timerSec ?? 0}s)` : `● record ${mode}`}

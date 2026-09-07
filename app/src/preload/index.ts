@@ -29,6 +29,8 @@ const api = {
     listInfo: (): Promise<BeatSummary[]> => ipcRenderer.invoke(CH.beatsInfo),
     read: (name: string): Promise<string> => ipcRenderer.invoke(CH.beatsRead, name),
     write: (name: string, content: string): Promise<void> => ipcRenderer.invoke(CH.beatsWrite, name, content),
+    writeIn: (session: string, name: string, content: string): Promise<void> =>
+      ipcRenderer.invoke(CH.beatsWriteIn, session, name, content),
     create: (name: string, content: string): Promise<void> => ipcRenderer.invoke(CH.beatsCreate, name, content),
     rename: (from: string, to: string): Promise<void> => ipcRenderer.invoke(CH.beatsRename, from, to),
     remove: (name: string): Promise<void> => ipcRenderer.invoke(CH.beatsRemove, name),

@@ -1,5 +1,5 @@
 import { desktop } from './desktop';
-import { hasDirtyDrafts, dirtyBeats, type DraftState } from './draftState';
+import { hasDirtyDrafts, dirtyBeats, type DraftState, type DraftSessionState } from './draftState';
 
 export type SaveAllResult = Record<string, { saved: boolean; conflict?: boolean; error?: string }>;
 
@@ -39,25 +39,17 @@ export function cancelSaveAll(reason = 'User cancelled'): SaveAllCancel {
 }
 
 /**
- * Cross-session Save All: writes each dirty draft for every session. Because
- * desktop.beats.write targets the currently active session's beat folder,
- * this contract is intended for use within a single active session or with
- * a session-scoped write mechanism. It reports conflicts explicitly and never
- * clears them; partial failures are preserved in the result. Conflicts are not
- * overwritten.
+ * Write every draft this session state holds, through the given writer.
+ * Dirty drafts are written in full; conflicts are reported and never
+ * overwritten, so a changed-on-disk beat stays visible instead of being
+ * clobbered on the way out the door.
  */
-export async function saveAllSessions(
-  draftState: DraftState,
+async function saveSessionDrafts(
   sessionName: string,
-  openBeat: string | undefined,
+  sessionState: DraftSessionState,
+  write: (beat: string, content: string) => Promise<void>,
 ): Promise<SaveAllResult> {
   const results: SaveAllResult = {};
-  // Focus on the requested session (typically the active session) to avoid
-  // switching active state while writing. Conflicts are reported but kept.
-  const sessionState = draftState[sessionName];
-  if (!sessionState) {
-    return results;
-  }
 
   // Process dirty drafts first (user edits), then conflicts.
   const beatsToSave = new Set([
@@ -82,7 +74,7 @@ export async function saveAllSessions(
     }
 
     try {
-      await desktop.beats.write(beat, content);
+      await write(beat, content);
       results[`${sessionName}/${beat}`] = { saved: true };
     } catch (e) {
       results[`${sessionName}/${beat}`] = {
@@ -90,6 +82,58 @@ export async function saveAllSessions(
         error: e instanceof Error ? e.message : String(e),
       };
     }
+  }
+  return results;
+}
+
+/**
+ * Cross-session Save All for the ACTIVE session: writes each dirty draft
+ * through desktop.beats.write, which targets the currently active session's
+ * beat folder. Conflicts are reported explicitly and never cleared; partial
+ * failures are preserved in the result.
+ */
+export async function saveAllSessions(
+  draftState: DraftState,
+  sessionName: string,
+  openBeat: string | undefined,
+): Promise<SaveAllResult> {
+  const sessionState = draftState[sessionName];
+  if (!sessionState) {
+    return {};
+  }
+  return saveSessionDrafts(sessionName, sessionState, (beat, content) => desktop.beats.write(beat, content));
+}
+
+/**
+ * Save every dirty draft in every session, for close.
+ *
+ * The active session's drafts go through desktop.beats.write (its folder is
+ * the one the main process has rooted the beat store in). Drafts left in
+ * OTHER sessions — the app moved on, but their edits are still only in this
+ * renderer — go through desktop.beats.writeIn, which targets the named
+ * session's folder without re-rooting anything. Writing those through
+ * beats.write would land them in the wrong session's files.
+ */
+export async function saveAllDrafts(
+  draftState: DraftState,
+  activeSession: string | undefined,
+  openBeat: string | undefined,
+): Promise<SaveAllResult> {
+  const results: SaveAllResult = {};
+  for (const session of Object.keys(draftState)) {
+    if (session === activeSession) {
+      Object.assign(results, await saveAllSessions(draftState, session, openBeat));
+      continue;
+    }
+    if (dirtyBeats(draftState, session).size === 0) {
+      continue;
+    }
+    Object.assign(
+      results,
+      await saveSessionDrafts(session, draftState[session]!, (beat, content) =>
+        desktop.beats.writeIn(session, beat, content),
+      ),
+    );
   }
   return results;
 }

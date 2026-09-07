@@ -214,9 +214,27 @@ async function main() {
   ipcMain.handle(CH.beatsCreate, (_event, name: string, content: string) => store.create(name, content));
   ipcMain.handle(CH.beatsRename, (_event, from: string, to: string) => store.rename(from, to));
   ipcMain.handle(CH.beatsRemove, (_event, name: string) => store.remove(name));
-  // Close veto / save-all coordinator contract: the renderer reports
-  // unpolled dirty drafts; the main process may veto quit or trigger
-  // batch writes without switching active session state.
+  // Close-time save-all needs to write drafts left in sessions the app has
+  // since moved away from. `beats:write` targets the ACTIVE session's folder,
+  // so writing another session's draft through it would corrupt the active
+  // one. This seam resolves the named session's folder explicitly, without
+  // re-rooting the store, watcher, or harness that belong to the active
+  // session, and it queues behind session transitions so a concurrent
+  // session deletion cannot race the write.
+  ipcMain.handle(CH.beatsWriteIn, (_event, session: string, name: string, content: string) =>
+    queueSessionTransition(async () => {
+      if (!(await sessions.has(session))) {
+        throw new Error(`Cannot save into missing session: ${session}`);
+      }
+      await createBeatStore(join(root, session)).write(name, content);
+    }),
+  );
+  // Close coordination: the renderer owns the close decision because only it
+  // can see renderer-only drafts. It reports whether drafts are dirty so
+  // close:check answers truthfully; interception itself happens in the
+  // renderer's beforeunload (its product dialog decides save/discard/stay),
+  // so main never needs to veto quit here — a veto with no listener on the
+  // other end would leave a quit silently dead.
   let closeDirty = false;
   ipcMain.handle(CH.closeCheck, async () => {
     return { dirty: closeDirty };
@@ -395,15 +413,12 @@ async function main() {
     await window.loadURL(served.url);
   }
 
-  // Close protection: veto quit when dirty drafts exist. The renderer
-  // responds through closeCheck; in a full implementation this would
-  // block quit and trigger save-all or show a confirmation dialog.
-  app.on('before-quit', async (event) => {
-    if (closeDirty) {
-      event.preventDefault();
-      window.webContents.send(CH.saveAllTrigger);
-    }
-  });
+  // The close decision is made entirely in the renderer (see the close
+  // coordination note above): its beforeunload intercepts the window close,
+  // shows the product dialog, saves or discards, and only then lets the close
+  // pass. Quitting flows through that same window close, so vetoing here
+  // would only abort the quit with nothing shown — the trap the old
+  // before-quit handler fell into when its save-all trigger had no listener.
 
   app.on('window-all-closed', () => {
     void watcher?.close();

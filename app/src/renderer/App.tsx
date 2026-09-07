@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { CloseDialog, type CloseFailure } from './components/CloseDialog';
 import { ConflictBar } from './components/ConflictBar';
 import { EditorContextMenu, type EditorMenuState } from './components/EditorContextMenu';
 import { FileTree, type FileTreeDraft, type FileTreeDraftAction } from './components/FileTree';
 import { Grip } from './components/Grip';
 import { HarnessPane } from './components/HarnessPane';
 import { PluginDock } from './components/PluginDock';
+import { RecordControl, type RecordEvent } from './components/RecordControl';
 import { SessionPicker, type SessionSummary } from './components/SessionPicker';
 import { StatusBar } from './components/StatusBar';
 import { TempoBox } from './components/TempoBox';
 import { SettingsPage } from './SettingsPage';
 import { desktop } from './desktop';
+import { collectUnpolledDrafts, saveAllDrafts } from './closeCoordinator';
 import {
   acceptDisk,
   activateBeat as restoreBeat,
@@ -39,7 +42,8 @@ import { onRendererError } from './reportErrors';
 import { useStrudel } from './useStrudel';
 import { normalizeBeatName } from '../shared/beatName';
 import { DEFAULT_BEAT_SORT, moveBeat, sortBeats, type BeatSortMode, type BeatSummary } from '../shared/beatSorting';
-import { DEFAULT_SETTINGS, type BeatSwitchTiming } from '../shared/settings';
+import { DEFAULT_SETTINGS, type BeatSwitchTiming, type Settings } from '../shared/settings';
+import { recordingFailureMessage, type RecordingMode } from '../shared/recording';
 import { nextCloneName } from '../shared/cloneName';
 import { handoffClonedBeat } from '../shared/cloneHandoff';
 import { STARTER_BEAT } from '../shared/starterBeat';
@@ -121,8 +125,13 @@ export function App() {
   const [beatSwitchTiming, setBeatSwitchTiming] = useState<BeatSwitchTiming>(
     DEFAULT_SETTINGS.beatSwitchTiming as BeatSwitchTiming,
   );
-  const [recordMode, setRecordMode] = useState('audio');
+  const [recordMode, setRecordMode] = useState<RecordingMode>('audio');
   const [closeBehavior, setCloseBehavior] = useState(DEFAULT_SETTINGS.closeBehavior);
+  // The close decision, as the app's own dialog. `closeAsk` holds the panel
+  // state (a failed save-all keeps it open with the failures listed);
+  // `closeSaving` is the busy flag while writes are in flight.
+  const [closeAsk, setCloseAsk] = useState<{ failures: CloseFailure[] } | undefined>(undefined);
+  const [closeSaving, setCloseSaving] = useState(false);
 
   useEffect(() => {
     desktop.settings.load().then((s) => {
@@ -145,10 +154,31 @@ export function App() {
   const treeDraftRef = useRef<FileTreeDraft | undefined>(undefined);
   const pickingRef = useRef(picking);
   const sessionRef = useRef<string>(undefined);
+  // Close lifecycle: once the user's choice has let a close through, the
+  // interception must stand down for that close (window.close() re-enters
+  // beforeunload); `closeBusyRef` keeps a second close attempt from starting
+  // a second save-all while one is already settling.
+  const closeConfirmedRef = useRef(false);
+  const closeBusyRef = useRef(false);
+  const closeBehaviorRef = useRef(closeBehavior);
   openRef.current = open;
   pickingRef.current = picking;
   treeDraftRef.current = treeDraft;
   sessionRef.current = session;
+  closeBehaviorRef.current = closeBehavior;
+
+  /** Settings saved from the Settings page, applied to every live surface at once. */
+  const applySettings = useCallback((next: Settings) => {
+    if (next.beatSwitchTiming) {
+      setBeatSwitchTiming(next.beatSwitchTiming);
+    }
+    if (next.recordConfig?.mode) {
+      setRecordMode(next.recordConfig.mode);
+    }
+    if (next.closeBehavior) {
+      setCloseBehavior(next.closeBehavior);
+    }
+  }, []);
 
   const updateTreeDraft = useCallback((next: FileTreeDraft | undefined) => {
     treeDraftRef.current = next;
@@ -917,21 +947,147 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [state.started, cps, buffer, draftState, dirty, open]);
 
-  // Electron runs beforeunload when a BrowserWindow is closed. Returning a
-  // warning here keeps all renderer-only drafts alive until the user chooses
-  // whether to stay; restarting the app creates a fresh, empty DraftState.
-  useEffect(() => {
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      captureCurrentDraft();
-      if (!hasDirtyDrafts(draftStateRef.current)) {
+  // Closing is the renderer's decision, because only the renderer can see
+  // its drafts. The window's beforeunload is just the interception seam: the
+  // product dialog (or the silent auto-save) is what the user actually meets.
+  //
+  //   clean        → the close passes untouched.
+  //   discard      → the close passes; renderer-only drafts die with it.
+  //   auto-save    → hold the close, write every dirty draft (any session),
+  //                  then let it through — or keep the app open with the
+  //                  failures listed if any write could not land.
+  //   ask          → hold the close and show Save all / Discard / Cancel.
+  //
+  // Once a choice has let the close through, closeConfirmedRef stands the
+  // interception down so window.close()'s own beforeunload passes — a
+  // preventDefault loop there is exactly the "close button does nothing"
+  // failure this flow replaces.
+  const closeAfterSaveAll = useCallback(async () => {
+    closeBusyRef.current = true;
+    setCloseSaving(true);
+    try {
+      const sessionName = sessionRef.current;
+      const result = await saveAllDrafts(draftStateRef.current, sessionName, openRef.current);
+      const failures: CloseFailure[] = Object.entries(result)
+        .filter(([, outcome]) => !outcome.saved)
+        .map(([beat, outcome]) => ({ beat, conflict: outcome.conflict === true, error: outcome.error }));
+      if (failures.length === 0) {
+        // Every draft is on disk. Mark them saved (so staying open — a close
+        // can still be vetoed elsewhere — shows clean state), then let it through.
+        for (const [key, outcome] of Object.entries(result)) {
+          if (!outcome.saved) {
+            continue;
+          }
+          const slash = key.indexOf('/');
+          const session = key.slice(0, slash);
+          const beat = key.slice(slash + 1);
+          const content = draftStateRef.current[session]?.drafts[beat];
+          if (content !== undefined) {
+            updateDraftState(saveBeat(draftStateRef.current, session, beat, content));
+          }
+        }
+        closeConfirmedRef.current = true;
+        desktop.close.reportDirty(false);
+        window.close();
         return;
       }
+      // A draft that could not be saved — a conflict, a refused write — must
+      // not be closed over. The dialog stays open with the reasons listed.
+      setCloseAsk({ failures });
+      setBeatError(`Close stopped: could not save ${failures.map((failure) => failure.beat).join(', ')}.`);
+    } finally {
+      closeBusyRef.current = false;
+      setCloseSaving(false);
+    }
+  }, [updateDraftState]);
+
+  const closeSaveAll = useCallback(() => void closeAfterSaveAll(), [closeAfterSaveAll]);
+
+  const closeDiscard = useCallback(() => {
+    closeConfirmedRef.current = true;
+    desktop.close.reportDirty(false);
+    window.close();
+  }, []);
+
+  const closeCancel = useCallback(() => {
+    setCloseAsk(undefined);
+  }, []);
+
+  // The titlebar record control. The take's blob is handled HERE: the
+  // control's own stop await and this export share one underlying recorder
+  // stop (see recording.ts), so the complete event stays a signal, not a
+  // file path. A failed take — no master mix, a dead recorder, a refused
+  // export — lands in the tree error surface via setBeatError, like every
+  // other non-pattern failure.
+  const onRecordEvent = useCallback((event: RecordEvent) => {
+    if (event.kind === 'fail') {
+      setBeatError(event.message);
+      return;
+    }
+    if (event.kind !== 'stop') {
+      return;
+    }
+    const { capture } = event;
+    void capture.stop().then(
+      async (blob) => {
+        try {
+          const data = new Uint8Array(await blob.arrayBuffer());
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const name = (openRef.current ?? 'take').replace(/\.js$/, '');
+          const saved = await desktop.recording.save(data, `strudel-${name}-${stamp}.${capture.extension}`);
+          if (saved === undefined) {
+            return; // The save dialog was declined; the take is dropped by choice.
+          }
+        } catch (error) {
+          setBeatError(recordingFailureMessage(error));
+        }
+      },
+      (error: unknown) => {
+        setBeatError(recordingFailureMessage(error));
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (closeConfirmedRef.current) {
+        return; // The user's choice already let this close through.
+      }
+      if (closeBusyRef.current) {
+        // A save-all for this close is already settling; hold, never restart.
+        event.preventDefault();
+        return;
+      }
+      captureCurrentDraft();
+      if (!hasDirtyDrafts(draftStateRef.current)) {
+        return; // Nothing is at stake; the close passes.
+      }
+      if (closeBehaviorRef.current === 'discard') {
+        closeConfirmedRef.current = true;
+        desktop.close.reportDirty(false);
+        return; // Unsaved edits are deliberately dropped with the renderer.
+      }
       event.preventDefault();
-      event.returnValue = 'Unsaved beats will be lost.';
+      if (closeBehaviorRef.current === 'auto-save') {
+        void closeAfterSaveAll();
+        return;
+      }
+      setCloseAsk({ failures: [] });
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [captureCurrentDraft]);
+  }, [captureCurrentDraft, closeAfterSaveAll]);
+
+  // The main process's close:check answers from what the renderer reports;
+  // dirty drafts are exactly what it is asked about.
+  useEffect(() => {
+    try {
+      desktop.close.reportDirty(hasDirtyDrafts(draftState));
+    } catch {
+      // The bridge can be gone while the app is still usable; the close
+      // decision never depended on this report.
+    }
+  }, [draftState]);
 
   const showSessionPicker = useCallback(() => {
     captureCurrentDraft();
@@ -959,7 +1115,7 @@ export function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (pickingRef.current || event.defaultPrevented || event.isComposing) {
+      if (pickingRef.current || showSettings || event.defaultPrevented || event.isComposing) {
         return;
       }
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
@@ -994,7 +1150,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [beginTreeDraft, save, toggle]);
+  }, [beginTreeDraft, save, showSettings, toggle]);
 
   // The dock clamp follows the Electron window as it is resized.
   useEffect(() => {
@@ -1081,8 +1237,22 @@ export function App() {
     setFunctionPlugins(next);
   }, []);
 
-  if (showSettings) {
-    return <SettingsPage onBack={() => setShowSettings(false)} />;
+  // Settings is an overlay, never a replacement: the app underneath keeps
+  // its editor, selection, and sound, so leaving Settings cannot reseed the
+  // buffer (the "// loading" regression) or stop the music.
+  const settingsOverlay = showSettings ? (
+    <SettingsPage onBack={() => setShowSettings(false)} onSettingsChange={applySettings} />
+  ) : null;
+
+  // Labels for the close dialog, computed at render from the same draft
+  // state the guard checked, so the panel names exactly what is at stake.
+  const closeDirtyLabels: string[] = [];
+  if (closeAsk !== undefined) {
+    for (const [session, beats] of Object.entries(collectUnpolledDrafts(draftState))) {
+      for (const beat of beats) {
+        closeDirtyLabels.push(`${session} / ${beat}`);
+      }
+    }
   }
 
   if (picking) {
@@ -1100,169 +1270,205 @@ export function App() {
   }
 
   return (
-    <div className="app" style={{ '--dock-h': `${dockH}px` } as CSSProperties}>
-      <header className="titlebar">
-        <button
-          className="collapse"
-          onClick={() => setTreeOpen(treeOpen ? 0 : 1)}
-          title={treeOpen ? 'Hide beats' : 'Show beats'}
-        >
-          {treeOpen ? '[<]' : '[>]'}
-        </button>
-        <button className="collapse" onClick={showSessionPicker} title="Switch session">
-          {session ?? 'sessions'}
-        </button>
-        <span className="beat">
-          <b>{open?.replace(/\.js$/, '') ?? 'no beat'}</b>
-          {dirty ? ' *' : ''}
-          {playbackSource && playbackSource !== open ? ` (playing: ${playbackSource.replace(/\.js$/, '')})` : ''}
-        </span>
-        <span className="transport">
-          <button onClick={toggle}>{state.started ? '■ stop' : '▶ play'}</button>
-          <button onClick={() => void save()} disabled={!dirty}>
-            save
-          </button>
-          <button onClick={() => void cloneBeat()} disabled={!open} title="Clone this beat and switch to it">
-            clone
-          </button>
-          <button onClick={() => changeTempo(cps - 0.05)} title="Slower" disabled={codedTempo}>
-            −
-          </button>
-          <TempoBox cps={cps} coded={codedTempo} onChange={changeTempo} />
-          <button onClick={() => changeTempo(cps + 0.05)} title="Faster" disabled={codedTempo}>
-            +
-          </button>
-        </span>
-        <span className="transport right">
-          <button className="collapse" onClick={() => setShowSettings((v) => !v)} title="Settings">
-            ⚙
-          </button>
+    <>
+      <div className="app" style={{ '--dock-h': `${dockH}px` } as CSSProperties}>
+        <header className="titlebar">
           <button
             className="collapse"
-            onClick={() => setTermOpen(termOpen ? 0 : 1)}
-            title={termOpen ? 'Hide harness' : 'Show harness'}
+            onClick={() => setTreeOpen(treeOpen ? 0 : 1)}
+            title={treeOpen ? 'Hide beats' : 'Show beats'}
           >
-            {termOpen ? '[>]' : '[<]'}
+            {treeOpen ? '[<]' : '[>]'}
           </button>
-        </span>
-      </header>
+          <button className="collapse" onClick={showSessionPicker} title="Switch session">
+            {session ?? 'sessions'}
+          </button>
+          <span className="beat">
+            <b>{open?.replace(/\.js$/, '') ?? 'no beat'}</b>
+            {dirty ? ' *' : ''}
+            {playbackSource && playbackSource !== open ? ` (playing: ${playbackSource.replace(/\.js$/, '')})` : ''}
+          </span>
+          <span className="transport">
+            <button onClick={toggle}>{state.started ? '■ stop' : '▶ play'}</button>
+            <RecordControl
+              mode={recordMode}
+              source={playbackSource ?? open ?? 'strudel++'}
+              masterAvailable={state.started}
+              onEvent={onRecordEvent}
+            />
+            <button onClick={() => void save()} disabled={!dirty}>
+              save
+            </button>
+            <button onClick={() => void cloneBeat()} disabled={!open} title="Clone this beat and switch to it">
+              clone
+            </button>
+            <button onClick={() => changeTempo(cps - 0.05)} title="Slower" disabled={codedTempo}>
+              −
+            </button>
+            <TempoBox cps={cps} coded={codedTempo} onChange={changeTempo} />
+            <button onClick={() => changeTempo(cps + 0.05)} title="Faster" disabled={codedTempo}>
+              +
+            </button>
+          </span>
+          <span className="transport right">
+            <button
+              className="collapse"
+              onClick={() => {
+                setEditorMenu(undefined);
+                setShowSettings((v) => !v);
+              }}
+              title="Settings"
+            >
+              ⚙
+            </button>
+            <button
+              className="collapse"
+              onClick={() => setTermOpen(termOpen ? 0 : 1)}
+              title={termOpen ? 'Hide harness' : 'Show harness'}
+            >
+              {termOpen ? '[>]' : '[<]'}
+            </button>
+          </span>
+        </header>
 
-      <div
-        className="panes"
-        style={
-          {
-            '--tree-w': treeOpen ? `${treeWidth}px` : '0px',
-            '--grip-w': treeOpen ? '5px' : '0px',
-            '--term-w': termOpen ? `${termWidth}px` : '0px',
-            '--term-grip-w': termOpen ? '5px' : '0px',
-          } as CSSProperties
-        }
-      >
-        {treeOpen ? (
-          <FileTree
-            beats={beats}
-            open={open}
-            dirtyByBeat={dirtyByBeat}
-            error={beatError}
-            onOpen={(name) => void openBeat(name)}
-            onCreate={(name) => void create(name)}
-            onRename={(from, to) => void rename(from, to)}
-            onRemove={(name) => void remove(name)}
-            onClone={(name) => void cloneBeat(name)}
-            draft={treeDraft}
-            onBeginDraft={beginTreeDraft}
-            onChangeDraft={updateTreeDraft}
-            onCancelDraft={() => updateTreeDraft(undefined)}
-            sortMode={beatSort}
-            manualOrder={manualBeatOrder}
-            onSortChange={changeSort}
-            onReorder={reorder}
-            onDismissError={() => setBeatError(undefined)}
-            latency={beatSwitchTiming}
-            onLatencyChange={(v) => setBeatSwitchTiming(v as BeatSwitchTiming)}
+        <div
+          className="panes"
+          style={
+            {
+              '--tree-w': treeOpen ? `${treeWidth}px` : '0px',
+              '--grip-w': treeOpen ? '5px' : '0px',
+              '--term-w': termOpen ? `${termWidth}px` : '0px',
+              '--term-grip-w': termOpen ? '5px' : '0px',
+            } as CSSProperties
+          }
+        >
+          {treeOpen ? (
+            <FileTree
+              beats={beats}
+              open={open}
+              dirtyByBeat={dirtyByBeat}
+              error={beatError}
+              onOpen={(name) => void openBeat(name)}
+              onCreate={(name) => void create(name)}
+              onRename={(from, to) => void rename(from, to)}
+              onRemove={(name) => void remove(name)}
+              onClone={(name) => void cloneBeat(name)}
+              draft={treeDraft}
+              onBeginDraft={beginTreeDraft}
+              onChangeDraft={updateTreeDraft}
+              onCancelDraft={() => updateTreeDraft(undefined)}
+              sortMode={beatSort}
+              manualOrder={manualBeatOrder}
+              onSortChange={changeSort}
+              onReorder={reorder}
+              onDismissError={() => setBeatError(undefined)}
+              latency={beatSwitchTiming}
+              onLatencyChange={(value) => {
+                const timing = value as BeatSwitchTiming;
+                setBeatSwitchTiming(timing);
+                // The Settings page shows the same choice from the persisted
+                // settings; keep the two from drifting apart by saving this too.
+                void desktop.settings.update({ beatSwitchTiming: timing }).catch((error: unknown) => {
+                  setBeatError(error instanceof Error ? error.message : String(error));
+                });
+              }}
+            />
+          ) : (
+            <div />
+          )}
+
+          {/* 210px is where the pane header stops fitting its own title. */}
+          <Grip
+            size={treeWidth}
+            onChange={setTreeWidth}
+            side="left"
+            min={210}
+            max={560}
+            resetTo={210}
+            label="Resize beats pane"
           />
-        ) : (
-          <div />
-        )}
 
-        {/* 210px is where the pane header stops fitting its own title. */}
+          <section className="pane">
+            <header className="pane-title">
+              <span>[ edit ]</span>
+              <span style={{ textTransform: 'none', color: 'var(--ink-faint)' }}>⌘S save · ⌃. play</span>
+            </header>
+            {conflict !== undefined && <ConflictBar onTakeTheirs={takeTheirs} onKeepMine={keepMine} />}
+            <div className="pane-body editor-viewport" ref={setEditorViewport}>
+              <div className="editor" ref={containerRef} onContextMenu={openEditorMenu} />
+              {editorMenu !== undefined && (
+                <EditorContextMenu
+                  menu={editorMenu.menu}
+                  playing={state.started}
+                  onToggle={toggle}
+                  onSpawn={spawnFloatingPlugin}
+                  onDismiss={() => setEditorMenu(undefined)}
+                />
+              )}
+            </div>
+          </section>
+
+          <Grip
+            size={termWidth}
+            onChange={setTermWidth}
+            side="right"
+            min={260}
+            max={1000}
+            resetTo={460}
+            label="Resize harness pane"
+          />
+
+          {harnesses.length > 0 && (
+            <HarnessPane harnesses={harnesses} active={harness} onPick={setHarness} beat={open} />
+          )}
+        </div>
+
+        {/* The dock's height is the grid's --dock-h row; this grip drags it. */}
         <Grip
-          size={treeWidth}
-          onChange={setTreeWidth}
-          side="left"
-          min={210}
-          max={560}
-          resetTo={210}
-          label="Resize beats pane"
+          orientation="horizontal"
+          size={dockH}
+          onChange={onDockHeightChange}
+          side="below"
+          min={DOCK_MIN}
+          max={dockMax}
+          resetTo={DOCK_DEFAULT}
+          label="Resize plugin dock"
         />
 
-        <section className="pane">
-          <header className="pane-title">
-            <span>[ edit ]</span>
-            <span style={{ textTransform: 'none', color: 'var(--ink-faint)' }}>⌘S save · ⌃. play</span>
-          </header>
-          {conflict !== undefined && <ConflictBar onTakeTheirs={takeTheirs} onKeepMine={keepMine} />}
-          <div className="pane-body editor-viewport" ref={setEditorViewport}>
-            <div className="editor" ref={containerRef} onContextMenu={openEditorMenu} />
-            {editorMenu !== undefined && (
-              <EditorContextMenu
-                menu={editorMenu.menu}
-                playing={state.started}
-                onToggle={toggle}
-                onSpawn={spawnFloatingPlugin}
-                onDismiss={() => setEditorMenu(undefined)}
-              />
-            )}
-          </div>
-        </section>
-
-        <Grip
-          size={termWidth}
-          onChange={setTermWidth}
-          side="right"
-          min={260}
-          max={1000}
-          resetTo={460}
-          label="Resize harness pane"
+        <PluginDock
+          dock={dock}
+          onChange={setDock}
+          playing={state.started}
+          floatingRoot={editorViewport}
+          functionPlugins={{
+            instances: functionPlugins,
+            onChange: changeFunctionPlugins,
+            onValue: changeFunctionPluginValue,
+          }}
         />
 
-        {harnesses.length > 0 && <HarnessPane harnesses={harnesses} active={harness} onPick={setHarness} beat={open} />}
+        <StatusBar
+          root={root}
+          beat={open}
+          dirty={dirty}
+          playing={state.started}
+          cps={cps}
+          harness={harness}
+          error={state.error?.message}
+          recordingMode={recordMode}
+        />
       </div>
-
-      {/* The dock's height is the grid's --dock-h row; this grip drags it. */}
-      <Grip
-        orientation="horizontal"
-        size={dockH}
-        onChange={onDockHeightChange}
-        side="below"
-        min={DOCK_MIN}
-        max={dockMax}
-        resetTo={DOCK_DEFAULT}
-        label="Resize plugin dock"
-      />
-
-      <PluginDock
-        dock={dock}
-        onChange={setDock}
-        playing={state.started}
-        floatingRoot={editorViewport}
-        functionPlugins={{
-          instances: functionPlugins,
-          onChange: changeFunctionPlugins,
-          onValue: changeFunctionPluginValue,
-        }}
-      />
-
-      <StatusBar
-        root={root}
-        beat={open}
-        dirty={dirty}
-        playing={state.started}
-        cps={cps}
-        harness={harness}
-        error={state.error?.message}
-        recordingMode={recordMode}
-      />
-    </div>
+      {settingsOverlay}
+      {closeAsk !== undefined && (
+        <CloseDialog
+          dirty={closeDirtyLabels}
+          failures={closeAsk.failures}
+          busy={closeSaving}
+          onSaveAll={closeSaveAll}
+          onDiscard={closeDiscard}
+          onCancel={closeCancel}
+        />
+      )}
+    </>
   );
 }

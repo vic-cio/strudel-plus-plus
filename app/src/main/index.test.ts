@@ -266,4 +266,34 @@ describe('openSession', () => {
     expect(await handlers.get(CH.sessionsActive)!({})).toBe('active-session');
     expect(sessionsTouch).toHaveBeenCalledWith('candidate-session');
   });
+
+  it('writes into a named session folder without re-rooting the active one', async () => {
+    const ptyStartHandler = handlers.get(CH.ptyStart)!;
+    await ptyStartHandler({}, 'shell', 80, 24);
+    const sessionsOpenHandler = handlers.get(CH.sessionsOpen)!;
+    await sessionsOpenHandler({}, 'active-session');
+    const config = ptyStart.mock.calls.at(-1)![2];
+    const activeBeatsRoot = config.beatsRoot;
+    beatStoreFactory.mockClear();
+
+    // A close-time save-all writes the draft a previous session left behind.
+    // It must land in that session's folder, not the active one's.
+    const writeInHandler = handlers.get(CH.beatsWriteIn)!;
+    await writeInHandler({}, 'left-behind-session', 'we begin.js', '// leftover draft');
+
+    expect(beatStoreFactory).toHaveBeenLastCalledWith('/tmp/strudel-index-test-root/left-behind-session');
+    const store = beatStoreFactory.mock.results.at(-1)!.value as { write: (...args: unknown[]) => Promise<void> };
+    expect(store.write).toHaveBeenCalledWith('we begin.js', '// leftover draft');
+    // The active session's harness, store, and watcher never moved.
+    expect(config.beatsRoot).toBe(activeBeatsRoot);
+    expect(await handlers.get(CH.sessionsActive)!({})).toBe('active-session');
+  });
+
+  it('refuses to write into a session that does not exist', async () => {
+    sessionsHas.mockResolvedValueOnce(false);
+    const writeInHandler = handlers.get(CH.beatsWriteIn)!;
+
+    await expect(writeInHandler({}, 'ghost-session', 'beat.js', '// draft')).rejects.toThrow(/missing session/i);
+    expect(beatStoreFactory).toHaveBeenCalledTimes(1); // only the boot store; no folder was touched
+  });
 });

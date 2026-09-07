@@ -15,6 +15,7 @@ export const CH = {
   beatsInfo: 'beats:info',
   beatsRead: 'beats:read',
   beatsWrite: 'beats:write',
+  beatsWriteIn: 'beats:writeIn',
   beatsCreate: 'beats:create',
   beatsRename: 'beats:rename',
   beatsRemove: 'beats:remove',
