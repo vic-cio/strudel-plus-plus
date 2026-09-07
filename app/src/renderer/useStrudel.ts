@@ -8,6 +8,7 @@ import { getAudioContextCurrentTime, initAudioOnFirstClick, webaudioOutput } fro
 import { clearInterval, setInterval } from 'worker-timers';
 import { prebake } from './prebake.mjs';
 import { deadeyeSettings, deadeyeTheme } from './deadeyeTheme.mjs';
+import { tokenAtEditorPoint } from './editorToken';
 
 // Strudel resolves themes by name from its own registry, so register before any
 // editor exists. Otherwise the editor comes up in the dark default.
@@ -157,6 +158,11 @@ export function useStrudel(onCodeChange: (code: string) => void) {
   /** Read the editor synchronously when an action moves focus to another beat. */
   const getCode = useCallback(() => editorRef.current?.code, []);
 
+  const tokenAt = useCallback((point: { x: number; y: number }) => {
+    const editor = editorRef.current?.editor;
+    return editor ? tokenAtEditorPoint(editor, point) : undefined;
+  }, []);
+
   /** Drop a stale REPL error. The editor only clears its error on the next
    * evaluation, so adopting another beat while stopped would otherwise keep
    * showing the previous beat's parse failure as if it were this one's. */
@@ -242,6 +248,7 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     setPlaybackSource: (source: PlaybackSource) => setPlaybackSource(source),
     setCode,
     getCode,
+    tokenAt,
     clearError,
     toggle,
     evaluate,

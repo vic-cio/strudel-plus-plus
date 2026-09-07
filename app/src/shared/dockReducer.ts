@@ -129,21 +129,34 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
     }
     case 'FLOAT_PANEL': {
       const floating = state.floating ? [...state.floating] : [];
-      if (floating.some((f) => f.instanceId === action.instanceId)) {
-        return { ...state, floating };
+      const currentZ = Math.max(0, ...floating.map((panel) => panel.geometry.zIndex));
+      const existing = floating.find((panel) => panel.instanceId === action.instanceId);
+      if (existing) {
+        const nextFloating = floating.map((panel) =>
+          panel.instanceId === action.instanceId
+            ? { ...panel, geometry: { ...panel.geometry, zIndex: currentZ + 1 } }
+            : panel,
+        );
+        return { ...state, floating: nextFloating };
       }
+      const zIndex = typeof action.geometry?.zIndex === 'number' ? action.geometry.zIndex : currentZ + 1;
       floating.push({
         instanceId: action.instanceId,
         geometry: {
-          x: typeof action.geometry?.x === 'number' ? action.geometry.x : 20,
-          y: typeof action.geometry?.y === 'number' ? action.geometry.y : 20,
+          x: typeof action.geometry?.x === 'number' ? action.geometry.x : 20 + zIndex * 30,
+          y: typeof action.geometry?.y === 'number' ? action.geometry.y : 20 + zIndex * 30,
           width: typeof action.geometry?.width === 'number' && action.geometry.width > 0 ? action.geometry.width : 320,
           height:
             typeof action.geometry?.height === 'number' && action.geometry.height > 0 ? action.geometry.height : 180,
-          zIndex: typeof action.geometry?.zIndex === 'number' ? action.geometry.zIndex : 1,
+          zIndex,
         },
       });
-      return { ...state, floating };
+      const panes = state.panes?.map((pane) => {
+        const tabs = pane.tabs?.filter((id) => id !== action.instanceId) ?? [];
+        const active = pane.active === action.instanceId ? tabs[0] : pane.active;
+        return active === undefined ? { tabs } : { ...pane, tabs, active };
+      });
+      return panes ? { ...state, panes, floating } : { ...state, floating };
     }
     case 'CLOSE_FLOATING': {
       const floating = (state.floating ?? []).filter((f) => f.instanceId !== action.instanceId);

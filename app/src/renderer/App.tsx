@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ConflictBar } from './components/ConflictBar';
+import { EditorContextMenu, type EditorMenuState } from './components/EditorContextMenu';
 import { FileTree, type FileTreeDraft, type FileTreeDraftAction } from './components/FileTree';
 import { Grip } from './components/Grip';
 import { HarnessPane } from './components/HarnessPane';
@@ -23,7 +24,16 @@ import {
   seedBeat,
   type DraftState,
 } from './draftState';
-import { listPlugins } from './plugins';
+import {
+  applyFunctionPluginValue,
+  createFunctionPluginInstance,
+  getPlugin,
+  listFunctionPlugins,
+  listSessionPlugins,
+  resolveFunctionPluginTarget,
+  type FunctionPluginInstance,
+  type FunctionPluginTarget,
+} from './plugins';
 import { APP_BUILT, readAudio, writeSnapshot } from './liveSnapshot';
 import { onRendererError } from './reportErrors';
 import { useStrudel } from './useStrudel';
@@ -102,6 +112,12 @@ export function App() {
   // each device's own faders. Session-scoped like the tempo map — switching
   // beats must not close the mixer.
   const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
+  const [editorViewport, setEditorViewport] = useState<HTMLDivElement | null>(null);
+  const [editorMenu, setEditorMenu] = useState<{
+    menu: EditorMenuState;
+    target?: FunctionPluginTarget;
+  }>();
+  const [functionPlugins, setFunctionPlugins] = useState<FunctionPluginInstance[]>([]);
   const [beatSwitchTiming, setBeatSwitchTiming] = useState<BeatSwitchTiming>(
     DEFAULT_SETTINGS.beatSwitchTiming as BeatSwitchTiming,
   );
@@ -119,6 +135,7 @@ export function App() {
   const bufferRef = useRef('');
   const openRef = useRef<string>(undefined);
   const draftStateRef = useRef<DraftState>({});
+  const functionPluginsRef = useRef<FunctionPluginInstance[]>([]);
   const pendingRenameRef = useRef<{ from: string; to: string } | undefined>(undefined);
   const beatActivationRef = useRef(0);
   const diskChangeVersionRef = useRef(new Map<string, number>());
@@ -189,6 +206,7 @@ export function App() {
     setPlaybackSource,
     setCode,
     getCode,
+    tokenAt,
     clearError,
     toggle,
     cps,
@@ -256,6 +274,11 @@ export function App() {
   const showBeat = useCallback(
     (name: string, content: string) => {
       beatActivationRef.current += 1;
+      if (openRef.current !== name) {
+        functionPluginsRef.current = [];
+        setFunctionPlugins([]);
+      }
+      setEditorMenu(undefined);
       bufferRef.current = content;
       setBuffer(content);
       openRef.current = name;
@@ -351,6 +374,9 @@ export function App() {
   const openSession = useCallback(
     (name: string, make = false) => {
       beatActivationRef.current += 1;
+      functionPluginsRef.current = [];
+      setFunctionPlugins([]);
+      setEditorMenu(undefined);
       captureCurrentDraft();
       const previousSession = sessionRef.current;
       let mainSessionOpened = false;
@@ -371,7 +397,7 @@ export function App() {
             const restoredCps = saved.cpsByBeat ?? {};
             const restoredDock = normalizeDockState(
               saved.dock,
-              listPlugins().map((plugin) => plugin.id),
+              listSessionPlugins().map((plugin) => plugin.id),
             );
             const preferredBeat = opened.beat;
             const reads = await Promise.allSettled(
@@ -991,6 +1017,70 @@ export function App() {
     [dockH, setDockHeight],
   );
 
+  const openEditorMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const token = tokenAt({ x: event.clientX, y: event.clientY });
+      const source = getCode() ?? bufferRef.current;
+      const target = token ? resolveFunctionPluginTarget(source, token.offset, listFunctionPlugins()) : undefined;
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const menu: EditorMenuState = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+      if (target) menu.functionName = target.functionName;
+      setEditorMenu(target ? { menu, target } : { menu });
+    },
+    [getCode, tokenAt],
+  );
+
+  const spawnFloatingPlugin = useCallback(
+    (functionName: string) => {
+      const currentMenu = editorMenu;
+      const beat = openRef.current;
+      if (!currentMenu?.target || currentMenu.target.functionName !== functionName || !beat || !editorViewport) return;
+      const instance = createFunctionPluginInstance({
+        beat,
+        target: currentMenu.target,
+        x: currentMenu.menu.x,
+        y: currentMenu.menu.y,
+        viewport: { width: editorViewport.offsetWidth, height: editorViewport.offsetHeight },
+      });
+      const next = functionPluginsRef.current.filter((candidate) => candidate.instanceId !== instance.instanceId);
+      next.push(instance);
+      functionPluginsRef.current = next;
+      setFunctionPlugins(next);
+    },
+    [editorMenu, editorViewport],
+  );
+
+  const changeFunctionPluginValue = useCallback(
+    (instanceId: string, value: number) => {
+      const instance = functionPluginsRef.current.find((candidate) => candidate.instanceId === instanceId);
+      const definition = instance ? getPlugin(instance.pluginId) : undefined;
+      if (!instance || definition?.scope !== 'function' || instance.beat !== openRef.current) return;
+      const source = getCode() ?? bufferRef.current;
+      let changed: ReturnType<typeof applyFunctionPluginValue>;
+      try {
+        changed = applyFunctionPluginValue({ source, definition, instance, value });
+      } catch (error) {
+        setBeatError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      const next = functionPluginsRef.current.map((candidate) =>
+        candidate.instanceId === instanceId ? changed.instance : candidate,
+      );
+      functionPluginsRef.current = next;
+      setFunctionPlugins(next);
+      setCode(changed.source);
+      onCodeChange(changed.source);
+      reevaluate();
+    },
+    [getCode, onCodeChange, reevaluate, setCode],
+  );
+
+  const changeFunctionPlugins = useCallback((next: FunctionPluginInstance[]) => {
+    functionPluginsRef.current = next;
+    setFunctionPlugins(next);
+  }, []);
+
   if (showSettings) {
     return <SettingsPage onBack={() => setShowSettings(false)} />;
   }
@@ -1112,7 +1202,18 @@ export function App() {
             <span style={{ textTransform: 'none', color: 'var(--ink-faint)' }}>⌘S save · ⌃. play</span>
           </header>
           {conflict !== undefined && <ConflictBar onTakeTheirs={takeTheirs} onKeepMine={keepMine} />}
-          <div className="pane-body editor" ref={containerRef} />
+          <div className="pane-body editor-viewport" ref={setEditorViewport}>
+            <div className="editor" ref={containerRef} onContextMenu={openEditorMenu} />
+            {editorMenu !== undefined && (
+              <EditorContextMenu
+                menu={editorMenu.menu}
+                playing={state.started}
+                onToggle={toggle}
+                onSpawn={spawnFloatingPlugin}
+                onDismiss={() => setEditorMenu(undefined)}
+              />
+            )}
+          </div>
         </section>
 
         <Grip
@@ -1140,7 +1241,17 @@ export function App() {
         label="Resize plugin dock"
       />
 
-      <PluginDock dock={dock} onChange={setDock} playing={state.started} />
+      <PluginDock
+        dock={dock}
+        onChange={setDock}
+        playing={state.started}
+        floatingRoot={editorViewport}
+        functionPlugins={{
+          instances: functionPlugins,
+          onChange: changeFunctionPlugins,
+          onValue: changeFunctionPluginValue,
+        }}
+      />
 
       <StatusBar
         root={root}

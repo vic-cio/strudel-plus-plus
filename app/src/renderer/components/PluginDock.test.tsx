@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { useState } from 'react';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginDock } from './PluginDock';
 import { registerPlugin } from '../plugins';
 import type { DockState } from '../../shared/dockState';
+import type { FunctionPluginInstance } from '../plugins';
 
 // Extra plugins so the dock has a menu to offer and tabs to juggle. The EQ
 // registers itself when the dock imports the plugin index.
@@ -13,18 +14,21 @@ registerPlugin({
   id: 'mixer',
   label: 'MIXER',
   kind: 'functional',
+  scope: 'session',
   mount: () => <div className="mixer-body">mixer controls</div>,
 });
 registerPlugin({
   id: 'scope',
   label: 'SCOPE',
   kind: 'visual',
+  scope: 'session',
   mount: () => <div className="scope-body">scope trace</div>,
 });
 registerPlugin({
   id: 'knob',
   label: 'KNOB',
   kind: 'functional',
+  scope: 'session',
   mount: ({ state, onState }) => (
     <button className="knob-turn" onClick={() => onState({ ...(state as object), turned: true })}>
       turn
@@ -48,7 +52,7 @@ afterEach(() => {
  * The harness mirrors that, so mutations actually move the rendered panes the
  * way App's setDock does.
  */
-function renderDock(initial?: DockState) {
+function renderDock(initial?: DockState, floatingRoot?: HTMLElement) {
   const onChange = vi.fn();
   function Harness() {
     const [dock, setDock] = useState<DockState>(initial ?? { split: false, panes: [{ tabs: [] }] });
@@ -60,6 +64,7 @@ function renderDock(initial?: DockState) {
           setDock(next);
         }}
         playing={false}
+        floatingRoot={floatingRoot ?? null}
       />
     );
   }
@@ -227,18 +232,126 @@ describe('PluginDock', () => {
     expect(lastCall!.pluginState ? lastCall!.pluginState.knob : undefined).toEqual({ turned: true });
   });
 
-  it('brings a floating panel to front when clicked', async () => {
-    const user = userEvent.setup();
-    renderDock({
-      split: false,
-      panes: [{ tabs: ['mixer'], active: 'mixer' }],
-      floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 300, height: 200, zIndex: 1 } }],
+  it('moves a floating panel while its header owns the pointer gesture', () => {
+    const editorViewport = document.createElement('div');
+    document.body.append(editorViewport);
+    Object.defineProperties(editorViewport, {
+      offsetWidth: { configurable: true, value: 800 },
+      offsetHeight: { configurable: true, value: 500 },
+    });
+    const { onChange } = renderDock(
+      {
+        split: false,
+        panes: [{ tabs: [] }],
+        floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 120, height: 80, zIndex: 1 } }],
+      },
+      editorViewport,
+    );
+    const header = document.querySelector('.floating-header');
+    expect(header).not.toBeNull();
+    if (!header) return;
+    expect(header.parentElement?.parentElement).toBe(editorViewport);
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.assign(header, {
+      setPointerCapture,
+      hasPointerCapture: () => true,
+      releasePointerCapture,
     });
 
-    const panel = document.querySelector('.floating-panel') as HTMLElement;
-    expect(panel).toBeTruthy();
-    // Click on the floating panel body (not the header drag) should focus it.
-    // Since it's the only panel, focus keeps it at top z.
-    // We verify the component does not crash on click.
+    expect(fireEvent.pointerDown(header, { pointerId: 7, clientX: 20, clientY: 20 })).toBe(false);
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    fireEvent.pointerMove(header, { pointerId: 7, clientX: 70, clientY: 80 });
+    fireEvent.pointerUp(header, { pointerId: 7, clientX: 70, clientY: 80 });
+
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.floating?.[0]?.geometry).toMatchObject({ x: 60, y: 70 });
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    editorViewport.remove();
+  });
+
+  it('brings a floating panel to front when clicked', async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderDock({
+      split: false,
+      panes: [{ tabs: [] }],
+      floating: [
+        { instanceId: 'mixer', geometry: { x: 10, y: 10, width: 300, height: 200, zIndex: 1 } },
+        { instanceId: 'scope', geometry: { x: 20, y: 20, width: 300, height: 200, zIndex: 2 } },
+      ],
+    });
+
+    const panel = [...document.querySelectorAll<HTMLElement>('.floating-panel')].find((candidate) =>
+      candidate.textContent?.includes('MIXER'),
+    );
+    expect(panel).toBeDefined();
+    if (!panel) return;
+    await user.click(panel);
+
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.floating?.find((candidate) => candidate.instanceId === 'mixer')?.geometry.zIndex).toBe(3);
+  });
+
+  it('drops an exact-function panel into the lower dock without persisting it', () => {
+    const initial: FunctionPluginInstance = {
+      instanceId: 'function:drums.js:gain:0:13',
+      pluginId: 'function-gain',
+      beat: 'drums.js',
+      functionName: 'gain',
+      functionRange: { from: { line: 0, ch: 8 }, to: { line: 0, ch: 12 } },
+      range: { from: { line: 0, ch: 13 }, to: { line: 0, ch: 17 } },
+      value: 0.25,
+      placement: {
+        kind: 'floating',
+        geometry: { x: 10, y: 10, width: 280, height: 132, zIndex: 100 },
+      },
+    };
+    const onDockChange = vi.fn();
+    const onFunctionChange = vi.fn();
+    function Harness() {
+      const [instances, setInstances] = useState([initial]);
+      return (
+        <PluginDock
+          dock={{ split: false, panes: [{ tabs: [] }] }}
+          onChange={onDockChange}
+          playing={false}
+          functionPlugins={{
+            instances,
+            onChange: (next) => {
+              onFunctionChange(next);
+              setInstances(next);
+            },
+            onValue: vi.fn(),
+          }}
+        />
+      );
+    }
+    render(<Harness />);
+    const dock = screen.getByRole('region', { name: 'plugin dock' });
+    vi.spyOn(dock, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 100,
+      left: 0,
+      top: 100,
+      right: 800,
+      bottom: 240,
+      width: 800,
+      height: 140,
+      toJSON: () => ({}),
+    });
+    Object.defineProperties(dock, {
+      offsetWidth: { configurable: true, value: 800 },
+      offsetHeight: { configurable: true, value: 500 },
+    });
+    const header = document.querySelector('.function-floating-header');
+    expect(header).not.toBeNull();
+
+    fireEvent.pointerDown(header!, { pointerId: 9, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(header!, { pointerId: 9, clientX: 60, clientY: 130 });
+    fireEvent.pointerUp(header!, { pointerId: 9, clientX: 60, clientY: 130 });
+
+    expect(onFunctionChange.mock.lastCall?.[0][0].placement).toEqual({ kind: 'docked' });
+    expect(document.querySelector('.function-docked-panel')).toBeTruthy();
+    expect(onDockChange).not.toHaveBeenCalled();
   });
 });

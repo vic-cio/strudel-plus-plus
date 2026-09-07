@@ -1,11 +1,11 @@
 import type { ComponentType } from 'react';
-import type { ControlContext } from './controlModel';
+import type { ControlContext, NumericControl } from './controlModel';
 
 /** What a plugin does in its pane. Visual plugins draw; functional ones control. */
 export type PluginKind = 'visual' | 'functional';
 
 /** Everything a plugin's component gets from the pane hosting it. */
-export type PluginProps = {
+export type SessionPluginProps = {
   /** True while the REPL runs. A visual plugin idles, rather than spinning its
    * animation loop, when audio is stopped. */
   playing: boolean;
@@ -18,15 +18,43 @@ export type PluginProps = {
   scope?: ControlContext;
 };
 
-export type PluginDef = {
+export type FunctionPluginProps = {
+  instanceId: string;
+  beat: string;
+  functionName: string;
+  control: NumericControl;
+  value: number;
+  playing: boolean;
+  onValue: (value: number) => void;
+};
+
+type PluginBase = {
   /** Stable id; this is what session state remembers the plugin by. */
   id: string;
   /** Tab label, shown between the brackets in the strip. */
   label: string;
   kind: PluginKind;
-  /** The component mounted into the pane, stretched to fill it. */
-  mount: ComponentType<PluginProps>;
 };
+
+export type SessionPluginDef = PluginBase & {
+  scope: 'session';
+  /** The component mounted into the pane, stretched to fill it. */
+  mount: ComponentType<SessionPluginProps>;
+};
+
+export type FunctionControlTemplate = Omit<NumericControl, 'scope'> & { argumentIndex: number };
+
+export type FunctionPluginDef = PluginBase & {
+  scope: 'function';
+  /** Function names this catalog entry can control from the editor menu. */
+  functionNames: readonly string[];
+  /** This first slice supports one numeric argument per function plugin. */
+  control: FunctionControlTemplate;
+  mount: ComponentType<FunctionPluginProps>;
+};
+
+export type PluginDef = SessionPluginDef | FunctionPluginDef;
+export type PluginProps = SessionPluginProps;
 
 const plugins = new Map<string, PluginDef>();
 
@@ -48,6 +76,14 @@ export function registerPlugin(def: PluginDef): void {
 /** Every registered plugin, in registration order. */
 export function listPlugins(): PluginDef[] {
   return [...plugins.values()];
+}
+
+export function listSessionPlugins(): SessionPluginDef[] {
+  return listPlugins().filter((plugin): plugin is SessionPluginDef => plugin.scope === 'session');
+}
+
+export function listFunctionPlugins(): FunctionPluginDef[] {
+  return listPlugins().filter((plugin): plugin is FunctionPluginDef => plugin.scope === 'function');
 }
 
 export function getPlugin(id: string): PluginDef | undefined {
