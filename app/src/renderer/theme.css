@@ -998,6 +998,36 @@ body[data-resizing='true'][data-resize-axis='row'] {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  position: relative;
+}
+.dock-pane-drop-target {
+  outline: 2px solid var(--gold);
+  outline-offset: -2px;
+}
+.dock-pane-drop-target::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--drop-tint);
+}
+.dock-pane-drop-target[data-drop-side='left']::before,
+.dock-pane-drop-target[data-drop-side='right']::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 6;
+  width: 3px;
+  pointer-events: none;
+  background: var(--gold);
+}
+.dock-pane-drop-target[data-drop-side='left']::before {
+  left: 0;
+}
+.dock-pane-drop-target[data-drop-side='right']::before {
+  right: 0;
 }
 .dock-pane + .dock-pane {
   border-left: 1px solid var(--line);

@@ -4,6 +4,7 @@ import {
   createFunctionPluginInstance,
   moveFunctionPlugin,
   resolveFunctionPluginTarget,
+  rebaseFunctionPluginInstances,
 } from './functionPlugin';
 import type { FunctionPluginDef } from './registry';
 
@@ -55,6 +56,43 @@ describe('function plugin instances', () => {
     expect(instance.instanceId).toContain('drums.js:gain:');
     expect(changed.source).toBe('stack(s("bd").gain(0.75).pan(0.1), s("hh").gain(0.8))');
     expect(changed.instance.value).toBe(0.75);
+  });
+
+  it('keeps every same-line gain occurrence independently addressable after an earlier edit', () => {
+    const source = 'stack(s("bd").gain(0.25), s("hh").gain(0.8))';
+    const firstTarget = resolveFunctionPluginTarget(source, source.indexOf('gain') + 1, [gain]);
+    const secondTarget = resolveFunctionPluginTarget(source, source.lastIndexOf('gain') + 1, [gain]);
+    expect(firstTarget).toBeDefined();
+    expect(secondTarget).toBeDefined();
+    if (!firstTarget || !secondTarget) return;
+
+    const first = createFunctionPluginInstance({
+      beat: 'drums.js',
+      target: firstTarget,
+      x: 20,
+      y: 20,
+      viewport: { width: 800, height: 500 },
+    });
+    const second = createFunctionPluginInstance({
+      beat: 'drums.js',
+      target: secondTarget,
+      x: 40,
+      y: 40,
+      viewport: { width: 800, height: 500 },
+    });
+    const firstChanged = applyFunctionPluginValue({ source, definition: gain, instance: first, value: 1.25 });
+
+    const [rebasedSecond] = rebaseFunctionPluginInstances([second], firstChanged.change, first.instanceId);
+    expect(rebasedSecond).toBeDefined();
+    if (!rebasedSecond) return;
+    expect(() =>
+      applyFunctionPluginValue({
+        source: firstChanged.source,
+        definition: gain,
+        instance: rebasedSecond,
+        value: 0.5,
+      }),
+    ).not.toThrow();
   });
 
   it('clamps floating motion without losing beat identity', () => {

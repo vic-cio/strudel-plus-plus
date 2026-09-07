@@ -58,7 +58,10 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
     cps: 0.5,
     changeCps: vi.fn(),
     releaseCps: vi.fn(),
-    getTransportNow: vi.fn((): number | undefined => undefined),
+    // Absent editor by default: the app falls back to whole-document
+    // setCode. Tests for the flicker-free path opt into true per test.
+    replaceCodeRange: vi.fn((): boolean => false),
+    getTransportNow: vi.fn(),
   };
   const codeChange: { current: ((code: string) => void) | undefined } = { current: undefined };
   type MockSessionState = {
@@ -218,8 +221,8 @@ beforeEach(() => {
   repl.setCode.mockClear();
   repl.toggle.mockClear();
   repl.reevaluate.mockClear();
-  vi.mocked(repl.getTransportNow).mockReset();
-  vi.mocked(repl.getTransportNow).mockReturnValue(undefined);
+  repl.replaceCodeRange.mockReset();
+  repl.replaceCodeRange.mockReturnValue(false);
 });
 
 /** The beat pointers persisted so far, in order (beat-pointer writes only). */
@@ -945,6 +948,56 @@ describe('editor context menu', () => {
 
     await user.click(screen.getByRole('button', { name: '808ing.js' }));
     expect(document.querySelector('.function-floating-panel')).toBeNull();
+  });
+
+  it('spawns an independent local plugin for each gain call in the active beat', async () => {
+    const code = 'stack(s("bd").gain(0.25), s("hh").gain(0.8))';
+    let offset = code.indexOf('gain') + 1;
+    repl.getCode.mockReturnValue(code);
+    repl.tokenAt.mockImplementation(() => ({ text: 'gain', offset }));
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.contextMenu(document.querySelector('.editor')!, { clientX: 120, clientY: 90 });
+    await user.click(screen.getByRole('menuitem', { name: 'Spawn floating gain plugin' }));
+    offset = code.lastIndexOf('gain') + 1;
+    fireEvent.contextMenu(document.querySelector('.editor')!, { clientX: 220, clientY: 120 });
+    await user.click(screen.getByRole('menuitem', { name: 'Spawn floating gain plugin' }));
+
+    expect(document.querySelectorAll('.function-floating-panel')).toHaveLength(2);
+    // Both calls live on line 1, so both close buttons share the title.
+    expect(screen.getAllByTitle('Close gain @ line 1 control')).toHaveLength(2);
+  });
+
+  it('updates a function gain in place without replacing the whole editor document', async () => {
+    const code = 's("bd").gain(0.25)';
+    repl.getCode.mockReturnValue(code);
+    repl.tokenAt.mockReturnValue({ text: 'gain', offset: code.indexOf('gain') + 1 });
+    // A live editor applies the numeric range edit itself, so the app must
+    // not fall back to whole-document setCode (the selection-flicker path).
+    repl.replaceCodeRange.mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await openSessionFromPicker(user);
+
+    fireEvent.contextMenu(document.querySelector('.editor')!, { clientX: 120, clientY: 90 });
+    await user.click(screen.getByRole('menuitem', { name: 'Spawn floating gain plugin' }));
+    repl.setCode.mockClear();
+
+    fireEvent.change(screen.getByRole('slider', { name: 'Function gain' }), { target: { value: '0.75' } });
+
+    expect(repl.setCode).not.toHaveBeenCalled();
+    // The app hands over the full document change; the editor seam reads
+    // the from/to/insert range out of it.
+    expect(repl.replaceCodeRange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: code.indexOf('0.25'),
+        to: code.indexOf('0.25)') + '0.25'.length,
+        insert: '0.75',
+      }),
+    );
+    expect(repl.reevaluate).toHaveBeenCalled();
   });
 
   it('offers only Stop music while playback is running', async () => {

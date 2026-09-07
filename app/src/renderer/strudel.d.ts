@@ -10,6 +10,7 @@ declare module '@strudel/codemirror' {
         wordAt(position: number): { from: number; to: number } | null;
         doc: { sliceString(from: number, to: number): string };
       };
+      dispatch(transaction: { changes: { from: number; to: number; insert: string } }): void;
     };
     repl: {
       setCps(cps: number): void;

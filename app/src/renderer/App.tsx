@@ -34,6 +34,7 @@ import {
   listFunctionPlugins,
   listSessionPlugins,
   resolveFunctionPluginTarget,
+  rebaseFunctionPluginInstances,
   type FunctionPluginInstance,
   type FunctionPluginTarget,
 } from './plugins';
@@ -243,6 +244,7 @@ export function App() {
     playbackSource,
     setPlaybackSource,
     setCode,
+    replaceCodeRange,
     getCode,
     tokenAt,
     clearError,
@@ -1255,12 +1257,23 @@ export function App() {
         setBeatError(error instanceof Error ? error.message : String(error));
         return;
       }
-      const next = functionPluginsRef.current.map((candidate) =>
-        candidate.instanceId === instanceId ? changed.instance : candidate,
+      const next = rebaseFunctionPluginInstances(
+        functionPluginsRef.current.map((candidate) =>
+          candidate.instanceId === instanceId ? changed.instance : candidate,
+        ),
+        changed.change,
+        instanceId,
       );
       functionPluginsRef.current = next;
       setFunctionPlugins(next);
-      setCode(changed.source);
+      // A surgical range edit keeps the cursor, selection, and highlight
+      // intact; only a missing editor falls back to whole-document setCode.
+      // Project the offset range out of the document change — the editor
+      // seam takes exactly { from, to, insert }.
+      const { from, to, insert } = changed.change;
+      if (!replaceCodeRange?.({ from, to, insert })) {
+        setCode(changed.source);
+      }
       onCodeChange(changed.source);
       reevaluate();
     },

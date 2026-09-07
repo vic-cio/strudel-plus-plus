@@ -1,10 +1,10 @@
 import { applyDelta, clampGeometry, defaultGeometry, type Geometry } from '../../shared/geometry';
-import { applyTransaction, buildTransaction } from './functionControl';
+import { applyTransaction, buildTransaction, positionToOffset, type DocumentChange } from './functionControl';
 import { validateControlValue, type NumericControl } from './controlModel';
 import type { SyntaxRange } from './syntaxFixture';
 import type { FunctionPluginDef } from './registry';
 
-export type FunctionPluginPlacement = { kind: 'floating'; geometry: Geometry } | { kind: 'docked' };
+export type FunctionPluginPlacement = { kind: 'floating'; geometry: Geometry } | { kind: 'docked'; paneIndex?: number };
 
 export type FunctionPluginInstance = {
   instanceId: string;
@@ -23,6 +23,12 @@ export type FunctionPluginTarget = {
   functionRange: SyntaxRange;
   range: SyntaxRange;
   value: number;
+};
+
+export type FunctionPluginValueChange = {
+  source: string;
+  instance: FunctionPluginInstance;
+  change: DocumentChange;
 };
 
 type IdentifierSpan = { from: number; to: number; text: string };
@@ -168,7 +174,7 @@ export function applyFunctionPluginValue(args: {
   definition: FunctionPluginDef;
   instance: FunctionPluginInstance;
   value: number;
-}): { source: string; instance: FunctionPluginInstance } {
+}): FunctionPluginValueChange {
   const control = materializeFunctionControl(args.definition, args.instance);
   const validated = validateControlValue(control, args.value);
   if (validated.kind === 'invalid') throw new Error(validated.message);
@@ -194,7 +200,50 @@ export function applyFunctionPluginValue(args: {
         to: { line: args.instance.range.from.line, ch: args.instance.range.from.ch + transaction.replacement.length },
       },
     },
+    change: {
+      from: positionToOffset(args.source, args.instance.range.from),
+      to: positionToOffset(args.source, args.instance.range.to),
+      insert: transaction.replacement,
+      line: args.instance.range.from.line,
+      fromCh: args.instance.range.from.ch,
+      toCh: args.instance.range.to.ch,
+    },
   };
+}
+
+export function rebaseFunctionPluginInstances(
+  instances: readonly FunctionPluginInstance[],
+  change: DocumentChange,
+  changedInstanceId: string,
+): FunctionPluginInstance[] {
+  const delta = change.insert.length - (change.to - change.from);
+  if (delta === 0) return [...instances];
+  return instances.map((instance) => {
+    if (instance.instanceId === changedInstanceId) return instance;
+    return {
+      ...instance,
+      functionRange: shiftRange(instance.functionRange, change, delta),
+      range: shiftRange(instance.range, change, delta),
+    };
+  });
+}
+
+function shiftRange(range: SyntaxRange, change: DocumentChange, delta: number): SyntaxRange {
+  return {
+    from: shiftPosition(range.from, change, delta),
+    to: shiftPosition(range.to, change, delta),
+  };
+}
+
+function shiftPosition(
+  position: { line: number; ch: number },
+  change: DocumentChange,
+  delta: number,
+): { line: number; ch: number } {
+  if (position.line > change.line || (position.line === change.line && position.ch >= change.toCh)) {
+    return position.line === change.line ? { ...position, ch: position.ch + delta } : position;
+  }
+  return position;
 }
 
 function readRange(source: string, range: SyntaxRange): string | undefined {
