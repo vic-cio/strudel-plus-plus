@@ -193,6 +193,41 @@ describe('PluginDock', () => {
     });
   });
 
+  it('floats a plugin when its tab is dragged past the movement threshold', () => {
+    const overlay = document.createElement('div');
+    document.body.append(overlay);
+    Object.defineProperties(overlay, {
+      offsetWidth: { configurable: true, value: 1000 },
+      offsetHeight: { configurable: true, value: 700 },
+    });
+    const { onChange } = renderDock({ split: false, panes: [{ tabs: ['mixer'], active: 'mixer' }] }, overlay);
+    const tab = screen.getByRole('button', { name: '[ MIXER ]' });
+    fireEvent.pointerDown(tab, { pointerId: 11, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(tab, { pointerId: 11, clientX: 60, clientY: 70 });
+    fireEvent.pointerUp(tab, { pointerId: 11, clientX: 60, clientY: 70 });
+
+    expect(document.querySelector('.floating-panel')).toBeTruthy();
+    expect(onChange.mock.lastCall?.[0]).toMatchObject({
+      panes: [{ tabs: [] }],
+      floating: [{ instanceId: 'mixer' }],
+    });
+    overlay.remove();
+  });
+
+  it('keeps a click on a dock tab as selection instead of starting a drag', async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderDock({ split: false, panes: [{ tabs: ['eq', 'mixer'], active: 'eq' }] });
+
+    await user.click(screen.getByRole('button', { name: '[ MIXER ]' }));
+
+    expect(screen.getByText('mixer controls')).toBeTruthy();
+    expect(document.querySelector('.floating-panel')).toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith({
+      split: false,
+      panes: [{ tabs: ['eq', 'mixer'], active: 'mixer' }],
+    });
+  });
+
   it('floats a plugin when the float button is clicked', async () => {
     const user = userEvent.setup();
     const { onChange } = renderDock({ split: false, panes: [{ tabs: ['mixer'], active: 'mixer' }] });
@@ -205,6 +240,22 @@ describe('PluginDock', () => {
     expect(lastCall).toBeDefined();
     expect(lastCall!.panes?.[0]?.tabs ?? []).not.toContain('mixer');
     expect(lastCall!.floating?.some((f) => f.instanceId === 'mixer')).toBe(true);
+  });
+
+  it('closes a floating EQ instead of reattaching or cloning it', async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderDock({
+      split: false,
+      panes: [{ tabs: [] }],
+      floating: [{ instanceId: 'eq', geometry: { x: 30, y: 30, width: 320, height: 180, zIndex: 2 } }],
+    });
+
+    await user.click(screen.getByTitle('Close EQ'));
+
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.panes?.[0]?.tabs ?? []).not.toContain('eq');
+    expect(lastDock?.floating ?? []).toHaveLength(0);
+    expect(screen.queryByText('[ no signal ]')).toBeNull();
   });
 
   it('closes a floating panel and reattaches it to the first pane', async () => {
@@ -336,7 +387,11 @@ describe('PluginDock', () => {
     }
     render(<Harness />);
     const dock = screen.getByRole('region', { name: 'plugin dock' });
-    vi.spyOn(dock, 'getBoundingClientRect').mockReturnValue({
+    // Hit-testing measures the live pane rectangles, so the pane itself is
+    // mocked — the section rect is never consulted.
+    const pane = dock.querySelector<HTMLElement>('.dock-pane');
+    expect(pane).not.toBeNull();
+    vi.spyOn(pane!, 'getBoundingClientRect').mockReturnValue({
       x: 0,
       y: 100,
       left: 0,
@@ -356,9 +411,9 @@ describe('PluginDock', () => {
 
     fireEvent.pointerDown(header!, { pointerId: 9, clientX: 20, clientY: 20 });
     fireEvent.pointerMove(header!, { pointerId: 9, clientX: 60, clientY: 130 });
-    expect(dock.className).toContain('dock-drop-target');
+    expect(dock.querySelector('.dock-pane')?.className).toContain('dock-pane-drop-target');
     fireEvent.pointerUp(header!, { pointerId: 9, clientX: 60, clientY: 130 });
-    expect(dock.className).not.toContain('dock-drop-target');
+    expect(dock.querySelector('.dock-pane')?.className).not.toContain('dock-pane-drop-target');
 
     expect(onFunctionChange.mock.lastCall?.[0][0].placement).toEqual({ kind: 'docked' });
     expect(document.querySelector('.function-docked-panel')).toBeTruthy();
@@ -417,7 +472,11 @@ describe('PluginDock', () => {
       overlay,
     );
     const dock = screen.getByRole('region', { name: 'plugin dock' });
-    vi.spyOn(dock, 'getBoundingClientRect').mockReturnValue({
+    // Hit-testing measures the live pane rectangles, so the pane itself is
+    // mocked — the section rect is never consulted.
+    const pane = dock.querySelector<HTMLElement>('.dock-pane');
+    expect(pane).not.toBeNull();
+    vi.spyOn(pane!, 'getBoundingClientRect').mockReturnValue({
       x: 0,
       y: 500,
       left: 0,
@@ -433,13 +492,109 @@ describe('PluginDock', () => {
     if (!header) return;
 
     fireEvent.pointerDown(header, { pointerId: 5, clientX: 30, clientY: 30 });
-    // Over the dock: the pale-yellow drop target shows.
+    // Over the dock: the hovered pane shows the pale-yellow drop target.
     fireEvent.pointerMove(header, { pointerId: 5, clientX: 200, clientY: 550 });
-    expect(dock.className).toContain('dock-drop-target');
+    expect(dock.querySelector('.dock-pane')?.className).toContain('dock-pane-drop-target');
     // Back out over the editor: the highlight goes away, the panel floats on.
     fireEvent.pointerMove(header, { pointerId: 5, clientX: 200, clientY: 300 });
-    expect(dock.className).not.toContain('dock-drop-target');
+    expect(dock.querySelector('.dock-pane')?.className).not.toContain('dock-pane-drop-target');
     expect(document.querySelector('.floating-panel')).toBeTruthy();
+    overlay.remove();
+  });
+
+  it('docks a floating session panel into the hovered right split pane', () => {
+    const overlay = document.createElement('div');
+    document.body.append(overlay);
+    Object.defineProperties(overlay, {
+      offsetWidth: { configurable: true, value: 1000 },
+      offsetHeight: { configurable: true, value: 700 },
+    });
+    const { onChange } = renderDock(
+      {
+        split: true,
+        panes: [{ tabs: ['eq'] }, { tabs: ['scope'] }],
+        floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 120, height: 80, zIndex: 1 } }],
+      },
+      overlay,
+    );
+    screen.getByRole('region', { name: 'plugin dock' });
+    const panes = [...document.querySelectorAll<HTMLElement>('.dock-pane')];
+    for (const [index, pane] of panes.entries()) {
+      vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue({
+        x: index * 500,
+        y: 500,
+        left: index * 500,
+        top: 500,
+        right: (index + 1) * 500,
+        bottom: 640,
+        width: 500,
+        height: 140,
+        toJSON: () => ({}),
+      });
+    }
+    const header = document.querySelector('.floating-panel .floating-header');
+    expect(header).not.toBeNull();
+    if (!header) return;
+
+    fireEvent.pointerDown(header, { pointerId: 12, clientX: 30, clientY: 30 });
+    fireEvent.pointerMove(header, { pointerId: 12, clientX: 700, clientY: 560 });
+    expect(panes[1]?.className).toContain('dock-pane-drop-target');
+    expect(panes[0]?.className).not.toContain('dock-pane-drop-target');
+    fireEvent.pointerUp(header, { pointerId: 12, clientX: 700, clientY: 560 });
+
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.panes?.[0]?.tabs).toEqual(['eq']);
+    expect(lastDock?.panes?.[1]?.tabs).toContain('mixer');
+    expect(lastDock?.floating ?? []).toHaveLength(0);
+    // No manual dock teardown: the section stays mounted for RTL cleanup,
+    // which unmounts it. Removing it here makes cleanup remove a detached
+    // node and throws NotFoundError.
+    overlay.remove();
+  });
+
+  it('auto-splits a full-width dock on the side where a floating panel is dropped', () => {
+    const overlay = document.createElement('div');
+    document.body.append(overlay);
+    Object.defineProperties(overlay, {
+      offsetWidth: { configurable: true, value: 1000 },
+      offsetHeight: { configurable: true, value: 700 },
+    });
+    const { onChange } = renderDock(
+      {
+        split: false,
+        panes: [{ tabs: ['eq'], active: 'eq' }],
+        floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 120, height: 80, zIndex: 1 } }],
+      },
+      overlay,
+    );
+    const pane = document.querySelector<HTMLElement>('.dock-pane');
+    expect(pane).not.toBeNull();
+    if (!pane) return;
+    vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 500,
+      left: 0,
+      top: 500,
+      right: 1000,
+      bottom: 640,
+      width: 1000,
+      height: 140,
+      toJSON: () => ({}),
+    });
+    const header = document.querySelector('.floating-panel .floating-header');
+    expect(header).not.toBeNull();
+    if (!header) return;
+
+    fireEvent.pointerDown(header, { pointerId: 13, clientX: 30, clientY: 30 });
+    fireEvent.pointerMove(header, { pointerId: 13, clientX: 800, clientY: 560 });
+    expect(pane.className).toContain('dock-pane-drop-target');
+    fireEvent.pointerUp(header, { pointerId: 13, clientX: 800, clientY: 560 });
+
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.split).toBe(true);
+    expect(lastDock?.panes?.[0]?.tabs).toEqual(['eq']);
+    expect(lastDock?.panes?.[1]?.tabs).toContain('mixer');
+    expect(lastDock?.floating ?? []).toHaveLength(0);
     overlay.remove();
   });
 
@@ -459,7 +614,11 @@ describe('PluginDock', () => {
       overlay,
     );
     const dock = screen.getByRole('region', { name: 'plugin dock' });
-    vi.spyOn(dock, 'getBoundingClientRect').mockReturnValue({
+    // Hit-testing measures the live pane rectangles, so the pane itself is
+    // mocked — the section rect is never consulted.
+    const pane = dock.querySelector<HTMLElement>('.dock-pane');
+    expect(pane).not.toBeNull();
+    vi.spyOn(pane!, 'getBoundingClientRect').mockReturnValue({
       x: 0,
       y: 500,
       left: 0,

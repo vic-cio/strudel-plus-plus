@@ -22,6 +22,27 @@ export type FunctionTransaction = {
   control: NumericControl;
 };
 
+export type DocumentChange = {
+  from: number;
+  to: number;
+  insert: string;
+  line: number;
+  fromCh: number;
+  toCh: number;
+};
+
+export function positionToOffset(documentText: string, position: { line: number; ch: number }): number {
+  const lines = documentText.split('\n');
+  if (position.line < 0 || position.line >= lines.length) {
+    throw new Error('Position out of document bounds');
+  }
+  const line = lines[position.line] ?? '';
+  if (position.ch < 0 || position.ch > line.length) {
+    throw new Error('Position out of line bounds');
+  }
+  return lines.slice(0, position.line).reduce((offset, text) => offset + text.length + 1, position.ch);
+}
+
 export function buildTransaction(
   documentText: string,
   control: NumericControl,

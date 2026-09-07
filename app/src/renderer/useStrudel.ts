@@ -155,6 +155,14 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     pendingCodeRef.current = code;
   }, []);
 
+  /** Apply one numeric edit without replacing the whole document. */
+  const replaceCodeRange = useCallback((change: { from: number; to: number; insert: string }): boolean => {
+    const editor = editorRef.current;
+    if (!editor) return false;
+    editor.editor.dispatch({ changes: change });
+    return true;
+  }, []);
+
   /** Read the editor synchronously when an action moves focus to another beat. */
   const getCode = useCallback(() => editorRef.current?.code, []);
 
@@ -272,6 +280,7 @@ export function useStrudel(onCodeChange: (code: string) => void) {
     playbackSource,
     setPlaybackSource: (source: PlaybackSource) => setPlaybackSource(source),
     setCode,
+    replaceCodeRange,
     getCode,
     tokenAt,
     clearError,

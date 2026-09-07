@@ -24,6 +24,7 @@ export {
   createFunctionPluginInstance,
   materializeFunctionControl,
   moveFunctionPlugin,
+  rebaseFunctionPluginInstances,
   resolveFunctionPluginTarget,
   type FunctionPluginInstance,
   type FunctionPluginPlacement,
