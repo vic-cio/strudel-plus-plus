@@ -72,8 +72,6 @@ function usePaneWidth(key: string, fallback: number) {
   return [width, setWidth] as const;
 }
 
-
-
 function sameOrder(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((name, index) => name === right[index]);
 }
@@ -114,6 +112,7 @@ export function App() {
   // harness, dock), so panels drag across panes instead of being clamped
   // inside the editor viewport.
   const [appOverlay, setAppOverlay] = useState<HTMLDivElement | null>(null);
+  const [editorViewport, setEditorViewport] = useState<HTMLDivElement | null>(null);
   const [editorMenu, setEditorMenu] = useState<{
     menu: EditorMenuState;
     target?: FunctionPluginTarget;
@@ -127,7 +126,6 @@ export function App() {
   // The close decision, as the app's own dialog. `closeAsk` holds the panel
   // state (a failed save-all keeps it open with the failures listed);
   // `closeSaving` is the busy flag while writes are in flight.
-
 
   useEffect(() => {
     desktop.settings.load().then((s) => {
@@ -1408,33 +1406,45 @@ export function App() {
           )}
         </div>
 
-      <PluginDock
-        dock={dock}
-        onChange={setDock}
-        playing={state.started}
-        floatingRoot={appOverlay}
-        functionPlugins={{
-          instances: functionPlugins,
-          onChange: changeFunctionPlugins,
-          onValue: changeFunctionPluginValue,
-        }}
-      />
+        <PluginDock
+          dock={dock}
+          onChange={setDock}
+          playing={state.started}
+          floatingRoot={appOverlay}
+          functionPlugins={{
+            instances: functionPlugins,
+            onChange: changeFunctionPlugins,
+            onValue: changeFunctionPluginValue,
+          }}
+        />
 
-      <StatusBar
-        root={root}
-        beat={open}
-        dirty={dirty}
-        playing={state.started}
-        cps={cps}
-        harness={harness}
-        error={state.error?.message}
-        recordingMode={recordMode}
-      />
+        <StatusBar
+          root={root}
+          beat={open}
+          dirty={dirty}
+          playing={state.started}
+          cps={cps}
+          harness={harness}
+          error={state.error?.message}
+          recordingMode={recordMode}
+        />
 
-      {/* Floating plugin panels render here via portal: one absolutely
+        {/* Floating plugin panels render here via portal: one absolutely
           positioned layer over the whole app. It never intercepts the pointer
           itself (pointer-events: none); only the panels inside it do. */}
-      <div className="app-overlay" ref={setAppOverlay} />
-    </div>
+        <div className="app-overlay" ref={setAppOverlay} />
+      </div>
+      {settingsOverlay}
+      {closeAsk !== undefined && (
+        <CloseDialog
+          dirty={closeDirtyLabels}
+          failures={closeAsk.failures}
+          busy={closeSaving}
+          onSaveAll={closeSaveAll}
+          onDiscard={closeDiscard}
+          onCancel={closeCancel}
+        />
+      )}
+    </>
   );
 }
