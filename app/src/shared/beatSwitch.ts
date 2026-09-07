@@ -17,8 +17,12 @@ const EPS = 1e-9;
 export type BoundaryTiming = Extract<BeatSwitchTiming, 'next-bar' | 'next-half-bar'>;
 
 export function nextBoundaryDelayMs(nowCycle: number, cps: number, timing: BoundaryTiming | BeatSwitchTiming): number {
-  if (!Number.isFinite(nowCycle) || !Number.isFinite(cps) || cps <= 0) {
+  if (!Number.isFinite(nowCycle)) {
     return 0;
+  }
+  const FALLBACK_MS = 2000; // fixed interval for non-playing / zero-cps
+  if (cps <= 0) {
+    return FALLBACK_MS;
   }
   let next: number;
   if (timing === 'next-half-bar') {

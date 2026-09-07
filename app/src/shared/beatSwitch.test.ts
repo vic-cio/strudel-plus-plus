@@ -75,7 +75,7 @@ describe('nextBoundaryDelayMs', () => {
   });
 
   it('falls back to a full interval for a non-positive cps', () => {
-    expect(nextBoundaryDelayMs(10.25, 0, 'next-bar')).toBe(0);
-    expect(nextBoundaryDelayMs(10.25, -1, 'next-half-bar')).toBe(0);
+    expect(nextBoundaryDelayMs(10.25, 0, 'next-bar')).toBe(2000);
+    expect(nextBoundaryDelayMs(10.25, -1, 'next-half-bar')).toBe(2000);
   });
 });

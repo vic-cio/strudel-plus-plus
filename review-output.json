@@ -1,0 +1,35 @@
+{
+  "findings": [
+    {
+      "id": "record-control-placement",
+      "severity": "info",
+      "description": "RecordControl moved to `.transport.right` in titlebar (App.tsx line 1340); matches required placement.",
+      "action": "no-op",
+      "review_scope": "source"
+    },
+    {
+      "id": "auto-save-default",
+      "severity": "info",
+      "description": "Default `askWhereToSave` is `false` (settings.ts line 36) and `saveRecordingAuto` writes to `<sessions root>/recordings` with traversal guard (`sanitizeRecordingFilename` throws on `.` / `..` / empty). Durable fix for the recording destination contract.",
+      "action": "no-op",
+      "review_scope": "source"
+    },
+    {
+      "id": "phase-aligned-timing",
+      "severity": "info",
+      "description": "`nextBoundaryDelayMs` (beatSwitch.ts) aligns to next boundary using `Math.floor(nowCycle + EPS) + 1`; falls back to fixed interval when `cps <= 0` or transport stopped. Tests cover quarter-through-bar, exact-boundary, half-bar cases.",
+      "action": "no-op",
+      "review_scope": "source"
+    }
+  ],
+  "tested": [
+    "app/src/shared/beatSwitch.test.ts",
+    "app/src/shared/recordingDestination.test.ts",
+    "app/src/main/recordingAutoSave.test.ts",
+    "app/src/renderer/App.test.tsx"
+  ],
+  "testing_summary": "Tests cover phase-aligned boundary math, traversal guard, auto-save path, dialog preference round-trip, and titlebar placement; no failures observed in review (tests not executed per gate rules).",
+  "risk_level": "low",
+  "risk_rationale": "Well-bounded durable fix: pure math helper, guarded filesystem path, explicit settings default, no authorization or privacy exposure.",
+  "risk_scope": "source-or-external"
+}
