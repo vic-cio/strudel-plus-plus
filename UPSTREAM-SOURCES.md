@@ -22,16 +22,21 @@ clone or archive the upstream repository, and no fetched file is tracked here.
 | `@strudel/dough` | `packages/dough/dough.mjs`   | `0982f0293cbe90dde566c6ba9f6345c63061a859fb791a17a33f4484ed184c0f` |
 | `@strudel/tidal` | `packages/tidal/tidal.mjs`   | `1174047e456b06683a4f255217ddeda7aa6ab4657d1ba3ce967589bc30f9a81d` |
 
+The fetched `packages/dough/dough.mjs` file is adapted at build time (its
+entry-point import is rewritten to point to the wrapper-owned
+`app/src/renderer/minimalOutput.mjs` helper). Because of that adaptation,
+the verified artifact digest for the written file is the `outputSha256`
+(`0a48bcef1f209b6e0b8dd131324a84d03ee85b13138fe78b82fe653af2404c00`)
+recorded in `scripts/fetch-upstream-artifacts.mjs`, not the upstream
+`sha256`. The build script verifies the upstream digest on download, applies
+the adaptation, and the CI artifact cache (`app/.external/strudel`) is
+validated against the adapted output digest on reuse; transient HTTP/network
+failures are retried with bounded exponential backoff.
+
 The external modules remain AGPL-licensed upstream code. Their corresponding
 source is available at the pinned upstream commit and is reproducible with
 `scripts/fetch-upstream-artifacts.mjs`; the attribution and license inventory
 is in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-
-The fetched Dough entry point is adapted at build time to import the small
-wrapper-owned `app/src/renderer/minimalOutput.mjs` helper. Published
-`@strudel/webaudio` no longer exports the helper expected by this current
-upstream entry point; the wrapper helper preserves its timing-keepalive signal
-without changing the Dough feature or vendoring the source package.
 
 ## Published dependency boundary
 
