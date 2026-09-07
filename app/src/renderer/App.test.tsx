@@ -58,6 +58,7 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
     cps: 0.5,
     changeCps: vi.fn(),
     releaseCps: vi.fn(),
+    getTransportNow: vi.fn((): number | undefined => undefined),
   };
   const codeChange: { current: ((code: string) => void) | undefined } = { current: undefined };
   type MockSessionState = {
@@ -93,7 +94,13 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
       reportDirty: vi.fn(),
     },
     recording: {
-      save: vi.fn(async (_data: Uint8Array, _suggestedName: string) => '/sessions-root/strudel-take.webm'),
+      save: vi.fn(
+        async (_data: Uint8Array, _suggestedName: string): Promise<string | undefined> =>
+          '/sessions-root/strudel-take.webm',
+      ),
+      saveAuto: vi.fn(
+        async (_data: Uint8Array, _suggestedName: string) => '/sessions-root/recordings/strudel-take.webm',
+      ),
     },
     sessions: {
       root: vi.fn(async () => '/sessions-root'),
@@ -211,6 +218,8 @@ beforeEach(() => {
   repl.setCode.mockClear();
   repl.toggle.mockClear();
   repl.reevaluate.mockClear();
+  vi.mocked(repl.getTransportNow).mockReset();
+  vi.mocked(repl.getTransportNow).mockReturnValue(undefined);
 });
 
 /** The beat pointers persisted so far, in order (beat-pointer writes only). */
@@ -1484,6 +1493,7 @@ describe('App record control', () => {
   beforeEach(() => {
     desktop.settings.load.mockResolvedValue({ version: 1 });
     desktop.recording.save.mockClear();
+    (desktop.recording.saveAuto as ReturnType<typeof vi.fn>).mockClear();
     repl.setCode.mockClear();
   });
 
@@ -1494,6 +1504,10 @@ describe('App record control', () => {
 
     const control = document.querySelector('.titlebar .record-control');
     expect(control).not.toBeNull();
+    // The captain's seat: the record control lives in the right titlebar
+    // group, not beside play/save/clone on the left.
+    expect(document.querySelector('.titlebar .transport.right .record-control')).not.toBeNull();
+    expect(document.querySelector('.titlebar .transport:not(.right) .record-control')).toBeNull();
     expect(screen.getByText('● record audio')).toBeTruthy();
     // One control, not one per surface: the status bar shows the mode as
     // text, never a second button.
@@ -1523,9 +1537,10 @@ describe('App record control', () => {
     expect(screen.getByText(/No live master audio/)).toBeTruthy();
     // Nothing was recorded and nothing was exported.
     expect(desktop.recording.save).not.toHaveBeenCalled();
+    expect(desktop.recording.saveAuto).not.toHaveBeenCalled();
   });
 
-  it('records the master mix and exports the take through the save path', async () => {
+  it('records the master mix and auto-saves the take without a dialog by default', async () => {
     const view = render(<App />);
     const user = userEvent.setup();
     await openSessionFromPicker(user);
@@ -1537,11 +1552,166 @@ describe('App record control', () => {
 
     await user.click(screen.getByRole('button', { name: 'Stop recording' }));
 
-    await waitFor(() => expect(desktop.recording.save).toHaveBeenCalledTimes(1));
-    const [data, suggested] = vi.mocked(desktop.recording.save).mock.calls[0]!;
+    await waitFor(() => expect(desktop.recording.saveAuto).toHaveBeenCalledTimes(1));
+    const [data, suggested] = vi.mocked(desktop.recording.saveAuto).mock.calls[0]!;
     expect(new TextDecoder().decode(data)).toBe('take');
     expect(suggested).toMatch(/^strudel-we begin-.*\.webm$/);
+    // Dialog-off never prompts: the native save path stays untouched.
+    expect(desktop.recording.save).not.toHaveBeenCalled();
     // A clean take leaves no failure behind on the error surface.
     expect(screen.queryByText(/Recording failed/)).toBeNull();
+  });
+
+  it('shows the save dialog when the ask preference is on', async () => {
+    desktop.settings.load.mockResolvedValue({
+      version: 1,
+      recordConfig: { enabled: false, mode: 'audio', askWhereToSave: true },
+    });
+    const view = render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+    repl.state = { started: true, error: undefined };
+    view.rerender(<App />);
+    await user.click(screen.getByRole('button', { name: 'Start recording' }));
+
+    await user.click(screen.getByRole('button', { name: 'Stop recording' }));
+
+    await waitFor(() => expect(desktop.recording.save).toHaveBeenCalledTimes(1));
+    expect(desktop.recording.saveAuto).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Recording failed/)).toBeNull();
+  });
+
+  it('treats a declined save dialog as a choice, not a failure', async () => {
+    desktop.settings.load.mockResolvedValue({
+      version: 1,
+      recordConfig: { enabled: false, mode: 'audio', askWhereToSave: true },
+    });
+    desktop.recording.save.mockResolvedValueOnce(undefined);
+    const view = render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+    repl.state = { started: true, error: undefined };
+    view.rerender(<App />);
+    await user.click(screen.getByRole('button', { name: 'Start recording' }));
+
+    await user.click(screen.getByRole('button', { name: 'Stop recording' }));
+
+    await waitFor(() => expect(desktop.recording.save).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Recording failed/)).toBeNull();
+  });
+
+  it('surfaces an auto-save write failure on the error surface', async () => {
+    desktop.recording.saveAuto.mockRejectedValueOnce(new Error('disk full'));
+    const view = render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+    repl.state = { started: true, error: undefined };
+    view.rerender(<App />);
+    await user.click(screen.getByRole('button', { name: 'Start recording' }));
+
+    await user.click(screen.getByRole('button', { name: 'Stop recording' }));
+
+    expect(await screen.findByText(/Recording failed/)).toBeTruthy();
+    expect(screen.getByText(/disk full/)).toBeTruthy();
+  });
+});
+
+describe('App beat-switch timing', () => {
+  beforeEach(() => {
+    desktop.settings.load.mockResolvedValue({ version: 1 });
+    repl.reevaluate.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('switches at the next bar boundary, not a fixed bar after the click', async () => {
+    // cps 0.5 → 2000ms per bar. A quarter through bar 10 (10.25), the next
+    // bar is 1500ms away; the old fixed delay waited the full 2000ms.
+    // Open with real timers (the picker + session open need them), then go
+    // fake only for the scheduled switch itself.
+    render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+    repl.reevaluate.mockClear();
+    vi.mocked(repl.getTransportNow).mockReturnValue(10.25);
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole('button', { name: '808ing.js' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1499);
+    });
+    expect(repl.reevaluate).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(repl.reevaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches at the next half-bar boundary for half-bar timing', async () => {
+    desktop.settings.load.mockResolvedValue({ version: 1, beatSwitchTiming: 'next-half-bar' });
+    render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+    repl.reevaluate.mockClear();
+    vi.mocked(repl.getTransportNow).mockReturnValue(10.25);
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole('button', { name: '808ing.js' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Next half-bar (10.5) is 500ms away, not the fixed 1000ms half-bar.
+    await act(async () => {
+      vi.advanceTimersByTime(499);
+    });
+    expect(repl.reevaluate).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(repl.reevaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('schedules the next boundary when clicked exactly on a bar line', async () => {
+    render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+    repl.reevaluate.mockClear();
+    vi.mocked(repl.getTransportNow).mockReturnValue(11);
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole('button', { name: '808ing.js' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Exactly on the line: the next bar is a full 2000ms away, never 0ms.
+    await act(async () => {
+      vi.advanceTimersByTime(1999);
+    });
+    expect(repl.reevaluate).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(repl.reevaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps immediate timing synchronous', async () => {
+    desktop.settings.load.mockResolvedValue({ version: 1, beatSwitchTiming: 'immediate' });
+    render(<App />);
+    const user = userEvent.setup();
+    await openSessionFromPicker(user);
+    repl.reevaluate.mockClear();
+    vi.mocked(repl.getTransportNow).mockReturnValue(10.25);
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole('button', { name: '808ing.js' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(repl.reevaluate).toHaveBeenCalledTimes(1);
   });
 });

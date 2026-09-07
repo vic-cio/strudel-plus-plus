@@ -99,6 +99,27 @@ describe('SettingsPage', () => {
     );
   });
 
+  it('round-trips the ask-where-to-save preference, default off', async () => {
+    await page();
+    // Default off: the persisted store says nothing, the box starts unchecked.
+    expect(screen.getByLabelText('Ask where to save each recording')).toBeTruthy();
+    expect((screen.getByLabelText('Ask where to save each recording') as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(screen.getByLabelText('Ask where to save each recording'));
+
+    await waitFor(() => expect(desktop.settings.update).toHaveBeenCalled());
+    expect(desktop.settings.update).toHaveBeenCalledWith({
+      recordConfig: expect.objectContaining({ askWhereToSave: true }),
+    });
+    await waitFor(() =>
+      expect(onSettingsChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recordConfig: expect.objectContaining({ askWhereToSave: true }),
+        }),
+      ),
+    );
+  });
+
   it('persists latency and close behavior choices with their persisted values shown', async () => {
     await page();
     const user = userEvent.setup();

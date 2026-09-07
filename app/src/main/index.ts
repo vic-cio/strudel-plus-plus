@@ -18,7 +18,7 @@ import type { FSWatcher } from 'chokidar';
 import { CH } from '../shared/ipc';
 import type { HarnessConfig, HarnessDef } from '../shared/harness';
 import type { SessionOpenResult, SessionState } from '../shared/session';
-import { writeRecording } from './recordingExport';
+import { saveRecordingAuto, writeRecording } from './recordingExport';
 import { validateSettings } from './settings';
 
 const MIME: Record<string, string> = {
@@ -299,6 +299,12 @@ async function main() {
     await writeRecording(chosen.filePath, data);
     return chosen.filePath;
   });
+  // Dialog-off auto-save: the take lands in <sessions root>/recordings
+  // without prompting. Failures reject so the renderer can surface them;
+  // there is no cancellation on this path.
+  ipcMain.handle(CH.recordingSaveAuto, (_event, data: Uint8Array, suggestedName: string) =>
+    saveRecordingAuto(root, data, suggestedName),
+  );
 
   async function openSession(name: string): Promise<SessionOpenResult> {
     if (!(await sessions.has(name))) {

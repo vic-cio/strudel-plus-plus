@@ -42,6 +42,8 @@ import { onRendererError } from './reportErrors';
 import { useStrudel } from './useStrudel';
 import { normalizeBeatName } from '../shared/beatName';
 import { DEFAULT_BEAT_SORT, moveBeat, sortBeats, type BeatSortMode, type BeatSummary } from '../shared/beatSorting';
+import { nextBoundaryDelayMs } from '../shared/beatSwitch';
+import { buildRecordingFilename } from '../shared/recordingDestination';
 import { DEFAULT_SETTINGS, type BeatSwitchTiming, type Settings } from '../shared/settings';
 import { recordingFailureMessage, type RecordingMode } from '../shared/recording';
 import { nextCloneName } from '../shared/cloneName';
@@ -134,12 +136,14 @@ export function App() {
     DEFAULT_SETTINGS.beatSwitchTiming as BeatSwitchTiming,
   );
   const [recordMode, setRecordMode] = useState<RecordingMode>('audio');
+  const [recordAskDialog, setRecordAskDialog] = useState(false);
   const [closeBehavior, setCloseBehavior] = useState(DEFAULT_SETTINGS.closeBehavior);
 
   useEffect(() => {
     desktop.settings.load().then((s) => {
       if (s.beatSwitchTiming) setBeatSwitchTiming(s.beatSwitchTiming);
       if (s.recordConfig?.mode) setRecordMode(s.recordConfig.mode);
+      setRecordAskDialog(s.recordConfig?.askWhereToSave === true);
       if (s.closeBehavior) setCloseBehavior(s.closeBehavior);
     });
   }, []);
@@ -178,6 +182,7 @@ export function App() {
     if (next.recordConfig?.mode) {
       setRecordMode(next.recordConfig.mode);
     }
+    setRecordAskDialog(next.recordConfig?.askWhereToSave === true);
     if (next.closeBehavior) {
       setCloseBehavior(next.closeBehavior);
     }
@@ -246,6 +251,7 @@ export function App() {
     changeCps,
     releaseCps,
     reevaluate,
+    getTransportNow,
   } = useStrudel(onCodeChange);
   const sessionOperationTail = useRef<Promise<void>>(Promise.resolve());
   const queueSessionOperation = useCallback((operation: () => Promise<void>): Promise<void> => {
@@ -628,10 +634,17 @@ export function App() {
             reevaluate();
             return;
           }
-          // Next half-bar / next bar: delay adoption against the live transport
-          // cycle (based on current cps) so the switch lands on a boundary.
-          const cycleMs = cps > 0 ? 1000 / cps : 500;
-          const delayMs = beatSwitchTiming === 'next-half-bar' ? Math.round(cycleMs / 2) : Math.round(cycleMs);
+          // Next half-bar / next bar: align to the live transport phase so the
+          // switch lands on the next boundary, not a fixed interval after the
+          // click. At an exact boundary the next boundary is scheduled.
+          const now = getTransportNow?.();
+          let delayMs: number;
+          if (now !== undefined) {
+            delayMs = nextBoundaryDelayMs(now, cps, beatSwitchTiming);
+          } else {
+            const cycleMs = cps > 0 ? 1000 / cps : 500;
+            delayMs = beatSwitchTiming === 'next-half-bar' ? Math.round(cycleMs / 2) : Math.round(cycleMs);
+          }
           const timer = window.setTimeout(() => {
             reevaluate();
           }, delayMs);
@@ -643,7 +656,7 @@ export function App() {
           (window as unknown as Record<string, unknown>).__strudelLatencyTimer = timer;
         }),
       ),
-    [activate, attempt, captureCurrentDraft, queueSessionOperation, reevaluate, beatSwitchTiming],
+    [activate, attempt, captureCurrentDraft, cps, getTransportNow, queueSessionOperation, reevaluate, beatSwitchTiming],
   );
 
   /** Clone a beat and move to the copy, without interrupting the sound. */
@@ -1019,37 +1032,46 @@ export function App() {
   // The titlebar record control. The take's blob is handled HERE: the
   // control's own stop await and this export share one underlying recorder
   // stop (see recording.ts), so the complete event stays a signal, not a
-  // file path. A failed take — no master mix, a dead recorder, a refused
-  // export — lands in the tree error surface via setBeatError, like every
-  // other non-pattern failure.
-  const onRecordEvent = useCallback((event: RecordEvent) => {
-    if (event.kind === 'fail') {
-      setBeatError(event.message);
-      return;
-    }
-    if (event.kind !== 'stop') {
-      return;
-    }
-    const { capture } = event;
-    void capture.stop().then(
-      async (blob) => {
-        try {
-          const data = new Uint8Array(await blob.arrayBuffer());
-          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const name = (openRef.current ?? 'take').replace(/\.js$/, '');
-          const saved = await desktop.recording.save(data, `strudel-${name}-${stamp}.${capture.extension}`);
-          if (saved === undefined) {
-            return; // The save dialog was declined; the take is dropped by choice.
+  // file path. Dialog-off takes auto-save into <sessions root>/recordings
+  // without prompting; dialog-on takes keep the native Save dialog (a
+  // declined dialog drops the take by choice, never a failure). Any real
+  // write/export failure lands in the tree error surface via setBeatError.
+  const onRecordEvent = useCallback(
+    (event: RecordEvent) => {
+      if (event.kind === 'fail') {
+        setBeatError(event.message);
+        return;
+      }
+      if (event.kind !== 'stop') {
+        return;
+      }
+      const { capture } = event;
+      const askDialog = recordAskDialog;
+      void capture.stop().then(
+        async (blob) => {
+          try {
+            const data = new Uint8Array(await blob.arrayBuffer());
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = buildRecordingFilename(openRef.current, stamp, capture.extension);
+            if (askDialog) {
+              const saved = await desktop.recording.save(data, filename);
+              if (saved === undefined) {
+                return; // The save dialog was declined; the take is dropped by choice.
+              }
+              return;
+            }
+            await desktop.recording.saveAuto(data, filename);
+          } catch (error) {
+            setBeatError(recordingFailureMessage(error));
           }
-        } catch (error) {
+        },
+        (error: unknown) => {
           setBeatError(recordingFailureMessage(error));
-        }
-      },
-      (error: unknown) => {
-        setBeatError(recordingFailureMessage(error));
-      },
-    );
-  }, []);
+        },
+      );
+    },
+    [recordAskDialog],
+  );
 
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -1303,12 +1325,6 @@ export function App() {
           </span>
           <span className="transport">
             <button onClick={toggle}>{state.started ? '■ stop' : '▶ play'}</button>
-            <RecordControl
-              mode={recordMode}
-              source={playbackSource ?? open ?? 'strudel++'}
-              masterAvailable={state.started}
-              onEvent={onRecordEvent}
-            />
             <button onClick={() => void save()} disabled={!dirty}>
               save
             </button>
@@ -1324,6 +1340,12 @@ export function App() {
             </button>
           </span>
           <span className="transport right">
+            <RecordControl
+              mode={recordMode}
+              source={playbackSource ?? open ?? 'strudel++'}
+              masterAvailable={state.started}
+              onEvent={onRecordEvent}
+            />
             <button
               className="collapse"
               onClick={() => {

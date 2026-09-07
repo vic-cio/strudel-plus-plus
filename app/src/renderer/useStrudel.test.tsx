@@ -9,7 +9,7 @@ const { mirrors, FakeMirror } = vi.hoisted(() => {
 
   class FakeMirror {
     readonly repl = {
-      scheduler: { cps: 0.5 },
+      scheduler: { cps: 0.5, started: true, now: vi.fn((): number => 10.25) },
       setCps: vi.fn(),
     };
 
@@ -99,11 +99,12 @@ afterEach(() => {
 /** Renders the editor plus buttons that drive the hook's wrappers, and shows
  * the error surface: the assertions read the status-bar-facing state. */
 function Harness({ showEditor }: { showEditor: boolean }) {
-  const { containerRef, state, setCode, evaluate, toggle, clearError } = useStrudel(vi.fn());
+  const { containerRef, state, setCode, evaluate, toggle, clearError, getTransportNow } = useStrudel(vi.fn());
   return (
     <>
       {showEditor ? <div data-testid="editor-host" ref={containerRef} /> : null}
       <output data-testid="repl-error">{state.error?.message ?? ''}</output>
+      <output data-testid="transport-now">{String(getTransportNow() ?? 'none')}</output>
       <button onClick={() => setCode('queued code')}>set code</button>
       <button onClick={() => evaluate()}>evaluate</button>
       <button onClick={() => toggle()}>toggle</button>
@@ -229,5 +230,26 @@ describe('useStrudel', () => {
     } finally {
       reconfigure.mockRestore();
     }
+  });
+
+  it('exposes the live transport position for phase-aligned switching', () => {
+    vi.useRealTimers();
+    const view = render(<Harness showEditor />);
+    view.rerender(<Harness showEditor />);
+
+    // The scheduler clock the sound already follows; the switch math reads it.
+    expect(screen.getByTestId('transport-now').textContent).toBe('10.25');
+  });
+
+  it('reports no transport position while stopped', () => {
+    vi.useRealTimers();
+    const view = render(<Harness showEditor />);
+    view.rerender(<Harness showEditor />);
+    expect(screen.getByTestId('transport-now').textContent).toBe('10.25');
+    const mirror = mirrors[0]!;
+    (mirror.repl.scheduler as { started?: boolean }).started = false;
+    view.rerender(<Harness showEditor />);
+
+    expect(screen.getByTestId('transport-now').textContent).toBe('none');
   });
 });

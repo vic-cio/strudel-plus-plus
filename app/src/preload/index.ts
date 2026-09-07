@@ -67,6 +67,8 @@ const api = {
   recording: {
     save: (data: Uint8Array, suggestedName: string): Promise<string | undefined> =>
       ipcRenderer.invoke(CH.recordingSave, data, suggestedName),
+    saveAuto: (data: Uint8Array, suggestedName: string): Promise<string> =>
+      ipcRenderer.invoke(CH.recordingSaveAuto, data, suggestedName),
   },
   harness: {
     list: (): Promise<HarnessDef[]> => ipcRenderer.invoke(CH.harnessList),

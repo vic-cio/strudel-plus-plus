@@ -11,7 +11,10 @@ declare module '@strudel/codemirror' {
         doc: { sliceString(from: number, to: number): string };
       };
     };
-    repl: { setCps(cps: number): void; scheduler?: { cps?: number } };
+    repl: {
+      setCps(cps: number): void;
+      scheduler?: { cps?: number; started?: boolean; now?: () => number };
+    };
     setCode(code: string): void;
     setTheme(name: string): void;
     setFontFamily(family: string): void;
