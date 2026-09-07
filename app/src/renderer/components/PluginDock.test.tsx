@@ -8,6 +8,14 @@ import { registerPlugin } from '../plugins';
 import type { DockState } from '../../shared/dockState';
 import type { FunctionPluginInstance } from '../plugins';
 
+// The renamed TRIM device lazy-loads the live audio engine when its panel
+// mounts; a resolved stub keeps these dock tests hermetic. The adapter seam
+// itself is covered by gainAudio's own tests.
+vi.mock('@strudel/webaudio', () => ({
+  getAudioContext: () => ({ currentTime: 0 }),
+  getSuperdoughAudioController: () => undefined,
+}));
+
 // Extra plugins so the dock has a menu to offer and tabs to juggle. The EQ
 // registers itself when the dock imports the plugin index.
 registerPlugin({
@@ -108,7 +116,7 @@ describe('PluginDock', () => {
     const names = within(screen.getByRole('menu'))
       .getAllByRole('menuitem')
       .map((item) => item.textContent);
-    expect(names).toEqual(['[ GAIN ]', '[ SCOPE ]', '[ KNOB ]']);
+    expect(names).toEqual(['[ TRIM ]', '[ SCOPE ]', '[ KNOB ]']);
   });
 
   it('switches the visible plugin from the tab strip', async () => {
@@ -348,10 +356,298 @@ describe('PluginDock', () => {
 
     fireEvent.pointerDown(header!, { pointerId: 9, clientX: 20, clientY: 20 });
     fireEvent.pointerMove(header!, { pointerId: 9, clientX: 60, clientY: 130 });
+    expect(dock.className).toContain('dock-drop-target');
     fireEvent.pointerUp(header!, { pointerId: 9, clientX: 60, clientY: 130 });
+    expect(dock.className).not.toContain('dock-drop-target');
 
     expect(onFunctionChange.mock.lastCall?.[0][0].placement).toEqual({ kind: 'docked' });
     expect(document.querySelector('.function-docked-panel')).toBeTruthy();
     expect(onDockChange).not.toHaveBeenCalled();
+  });
+
+  it('drags a floating panel against the app overlay bounds, not a pane', () => {
+    const overlay = document.createElement('div');
+    document.body.append(overlay);
+    Object.defineProperties(overlay, {
+      offsetWidth: { configurable: true, value: 1000 },
+      offsetHeight: { configurable: true, value: 700 },
+    });
+    const { onChange } = renderDock(
+      {
+        split: false,
+        panes: [{ tabs: [] }],
+        floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 120, height: 80, zIndex: 1 } }],
+      },
+      overlay,
+    );
+    const panel = document.querySelector('.floating-panel');
+    expect(panel).not.toBeNull();
+    if (!panel) return;
+    // The panel lives in the app-level overlay, the one coordinate space
+    // that spans every pane of the app.
+    expect(panel.parentElement).toBe(overlay);
+    const header = panel.querySelector('.floating-header');
+    expect(header).not.toBeNull();
+    if (!header) return;
+
+    fireEvent.pointerDown(header, { pointerId: 4, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(header, { pointerId: 4, clientX: 2000, clientY: 2000 });
+    fireEvent.pointerUp(header, { pointerId: 4, clientX: 2000, clientY: 2000 });
+
+    // A drag far past the overlay's edge clamps to the overlay's own bounds
+    // (1000×700), not to any single pane inside it.
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.floating?.[0]?.geometry).toMatchObject({ x: 880, y: 620 });
+    overlay.remove();
+  });
+
+  it('highlights the dock as a drop target only while a dragged panel hovers it', () => {
+    const overlay = document.createElement('div');
+    document.body.append(overlay);
+    Object.defineProperties(overlay, {
+      offsetWidth: { configurable: true, value: 1000 },
+      offsetHeight: { configurable: true, value: 700 },
+    });
+    renderDock(
+      {
+        split: false,
+        panes: [{ tabs: [] }],
+        floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 120, height: 80, zIndex: 1 } }],
+      },
+      overlay,
+    );
+    const dock = screen.getByRole('region', { name: 'plugin dock' });
+    vi.spyOn(dock, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 500,
+      left: 0,
+      top: 500,
+      right: 1000,
+      bottom: 640,
+      width: 1000,
+      height: 140,
+      toJSON: () => ({}),
+    });
+    const header = document.querySelector('.floating-panel .floating-header');
+    expect(header).not.toBeNull();
+    if (!header) return;
+
+    fireEvent.pointerDown(header, { pointerId: 5, clientX: 30, clientY: 30 });
+    // Over the dock: the pale-yellow drop target shows.
+    fireEvent.pointerMove(header, { pointerId: 5, clientX: 200, clientY: 550 });
+    expect(dock.className).toContain('dock-drop-target');
+    // Back out over the editor: the highlight goes away, the panel floats on.
+    fireEvent.pointerMove(header, { pointerId: 5, clientX: 200, clientY: 300 });
+    expect(dock.className).not.toContain('dock-drop-target');
+    expect(document.querySelector('.floating-panel')).toBeTruthy();
+    overlay.remove();
+  });
+
+  it('docks a floating session panel released over the dock', () => {
+    const overlay = document.createElement('div');
+    document.body.append(overlay);
+    Object.defineProperties(overlay, {
+      offsetWidth: { configurable: true, value: 1000 },
+      offsetHeight: { configurable: true, value: 700 },
+    });
+    const { onChange } = renderDock(
+      {
+        split: false,
+        panes: [{ tabs: ['eq'] }],
+        floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 120, height: 80, zIndex: 1 } }],
+      },
+      overlay,
+    );
+    const dock = screen.getByRole('region', { name: 'plugin dock' });
+    vi.spyOn(dock, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 500,
+      left: 0,
+      top: 500,
+      right: 1000,
+      bottom: 640,
+      width: 1000,
+      height: 140,
+      toJSON: () => ({}),
+    });
+    const header = document.querySelector('.floating-panel .floating-header');
+    expect(header).not.toBeNull();
+    if (!header) return;
+
+    fireEvent.pointerDown(header, { pointerId: 6, clientX: 30, clientY: 30 });
+    fireEvent.pointerMove(header, { pointerId: 6, clientX: 400, clientY: 560 });
+    fireEvent.pointerUp(header, { pointerId: 6, clientX: 400, clientY: 560 });
+
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.panes?.[0]?.tabs).toContain('mixer');
+    expect(lastDock?.floating ?? []).toHaveLength(0);
+    expect(document.querySelector('.floating-panel')).toBeNull();
+    expect(dock.className).not.toContain('dock-drop-target');
+    overlay.remove();
+  });
+
+  it('does not drag or dock from a press on the floating close button', () => {
+    const overlay = document.createElement('div');
+    document.body.append(overlay);
+    Object.defineProperties(overlay, {
+      offsetWidth: { configurable: true, value: 1000 },
+      offsetHeight: { configurable: true, value: 700 },
+    });
+    const { onChange } = renderDock(
+      {
+        split: false,
+        panes: [{ tabs: [] }],
+        floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 120, height: 80, zIndex: 1 } }],
+      },
+      overlay,
+    );
+    const header = document.querySelector('.floating-header');
+    expect(header).not.toBeNull();
+    if (!header) return;
+    const close = header.querySelector('button.floating-close');
+    expect(close).not.toBeNull();
+    if (!close) return;
+    const setPointerCapture = vi.fn();
+    Object.assign(header, { setPointerCapture, hasPointerCapture: () => true });
+
+    // A press that begins on the close button never becomes a drag gesture:
+    // no capture, and a wide pointer travel writes no geometry at all.
+    fireEvent.pointerDown(close, { pointerId: 7, clientX: 20, clientY: 20 });
+    expect(setPointerCapture).not.toHaveBeenCalled();
+    fireEvent.pointerMove(header, { pointerId: 7, clientX: 500, clientY: 500 });
+    fireEvent.pointerUp(header, { pointerId: 7, clientX: 500, clientY: 500 });
+    expect(onChange).not.toHaveBeenCalled();
+
+    // The click still closes through the shared path, reattaching cleanly.
+    fireEvent.click(close);
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.panes?.[0]?.tabs).toContain('mixer');
+    expect(lastDock?.floating ?? []).toHaveLength(0);
+    overlay.remove();
+  });
+
+  it('never offers a plugin that is already floating in the add menu', async () => {
+    const user = userEvent.setup();
+    renderDock({
+      split: false,
+      panes: [{ tabs: ['eq'] }],
+      floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 320, height: 180, zIndex: 1 } }],
+    });
+
+    await user.click(screen.getByTitle('Add device'));
+
+    const names = within(screen.getByRole('menu'))
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent);
+    expect(names).toEqual(['[ TRIM ]', '[ SCOPE ]', '[ KNOB ]']);
+  });
+
+  it('closing a floating panel already open in a pane never clones the plugin', async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderDock({
+      split: true,
+      panes: [{ tabs: ['eq'] }, { tabs: ['mixer'] }],
+      floating: [{ instanceId: 'mixer', geometry: { x: 10, y: 10, width: 320, height: 180, zIndex: 1 } }],
+    });
+
+    await user.click(screen.getByTitle('Reattach MIXER'));
+
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    const openPanes = (lastDock?.panes ?? []).filter((pane) => (pane.tabs ?? []).includes('mixer'));
+    expect(openPanes).toHaveLength(1);
+    expect(lastDock?.panes?.[1]?.tabs).toContain('mixer');
+    expect(lastDock?.floating ?? []).toHaveLength(0);
+  });
+
+  it('titles a floating function control with its exact call and line', () => {
+    const instance: FunctionPluginInstance = {
+      instanceId: 'function:drums.js:gain:1:13',
+      pluginId: 'function-gain',
+      beat: 'drums.js',
+      functionName: 'gain',
+      functionRange: { from: { line: 1, ch: 8 }, to: { line: 1, ch: 12 } },
+      range: { from: { line: 1, ch: 13 }, to: { line: 1, ch: 17 } },
+      value: 0.25,
+      placement: {
+        kind: 'floating',
+        geometry: { x: 10, y: 10, width: 280, height: 132, zIndex: 100 },
+      },
+    };
+    function Harness() {
+      const [instances, setInstances] = useState([instance]);
+      return (
+        <PluginDock
+          dock={{ split: false, panes: [{ tabs: [] }] }}
+          onChange={vi.fn()}
+          playing={false}
+          functionPlugins={{
+            instances,
+            onChange: (next) => setInstances(next),
+            onValue: vi.fn(),
+          }}
+        />
+      );
+    }
+    render(<Harness />);
+
+    const header = document.querySelector('.function-floating-header');
+    expect(header?.textContent).toContain('[ GAIN · gain @ line 2 ]');
+    expect(screen.getByTitle('Close gain @ line 2 control')).toBeTruthy();
+  });
+
+  it('titles a docked function tab with its exact call and line', () => {
+    const instance: FunctionPluginInstance = {
+      instanceId: 'function:drums.js:gain:1:13',
+      pluginId: 'function-gain',
+      beat: 'drums.js',
+      functionName: 'gain',
+      functionRange: { from: { line: 1, ch: 8 }, to: { line: 1, ch: 12 } },
+      range: { from: { line: 1, ch: 13 }, to: { line: 1, ch: 17 } },
+      value: 0.25,
+      placement: { kind: 'docked' },
+    };
+    function Harness() {
+      const [instances, setInstances] = useState([instance]);
+      return (
+        <PluginDock
+          dock={{ split: false, panes: [{ tabs: [] }] }}
+          onChange={vi.fn()}
+          playing={false}
+          functionPlugins={{
+            instances,
+            onChange: (next) => setInstances(next),
+            onValue: vi.fn(),
+          }}
+        />
+      );
+    }
+    render(<Harness />);
+
+    expect(screen.getByRole('button', { name: '[ GAIN · gain @ line 2 ]' })).toBeTruthy();
+    expect(screen.getByTitle('Float gain @ line 2 control')).toBeTruthy();
+  });
+
+  it('renders the renamed TRIM device under its stable gain id', () => {
+    // Sessions remember the device by id ('gain'), so the TRIM rename must
+    // stay presentation-only: restored state keeps resolving to the tab.
+    renderDock({ split: false, panes: [{ tabs: ['eq', 'gain'], active: 'eq' }] });
+
+    expect(screen.getByRole('button', { name: '[ TRIM ]' })).toBeTruthy();
+    expect(screen.getByTitle('Close TRIM')).toBeTruthy();
+  });
+
+  it('reattaches a floating TRIM panel through the shared close path', async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderDock({
+      split: false,
+      panes: [{ tabs: [] }],
+      floating: [{ instanceId: 'gain', geometry: { x: 10, y: 10, width: 320, height: 180, zIndex: 1 } }],
+    });
+
+    await user.click(screen.getByTitle('Reattach TRIM'));
+
+    const lastDock = onChange.mock.lastCall?.[0] as DockState | undefined;
+    expect(lastDock?.panes?.[0]?.tabs).toEqual(['gain']);
+    expect(lastDock?.floating ?? []).toHaveLength(0);
   });
 });

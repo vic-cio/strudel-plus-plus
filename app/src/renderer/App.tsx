@@ -116,7 +116,11 @@ export function App() {
   // each device's own faders. Session-scoped like the tempo map — switching
   // beats must not close the mixer.
   const [dock, setDock] = useState<DockState>({ split: false, panes: [{ tabs: [] }] });
-  const [editorViewport, setEditorViewport] = useState<HTMLDivElement | null>(null);
+  // The app-level overlay every floating plugin panel lives in: one
+  // coordinate space spanning the whole app surface (beats sidebar, editor,
+  // harness, dock), so panels drag across panes instead of being clamped
+  // inside the editor viewport.
+  const [appOverlay, setAppOverlay] = useState<HTMLDivElement | null>(null);
   const [editorMenu, setEditorMenu] = useState<{
     menu: EditorMenuState;
     target?: FunctionPluginTarget;
@@ -1180,7 +1184,14 @@ export function App() {
       const source = getCode() ?? bufferRef.current;
       const target = token ? resolveFunctionPluginTarget(source, token.offset, listFunctionPlugins()) : undefined;
       const bounds = event.currentTarget.getBoundingClientRect();
-      const menu: EditorMenuState = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+      const menu: EditorMenuState = {
+        x: event.clientX - bounds.left,
+        y: event.clientY - bounds.top,
+        // The raw client point too: a spawned floating panel is born in the
+        // app overlay's coordinate space, not the editor viewport's.
+        clientX: event.clientX,
+        clientY: event.clientY,
+      };
       if (target) menu.functionName = target.functionName;
       setEditorMenu(target ? { menu, target } : { menu });
     },
@@ -1191,20 +1202,23 @@ export function App() {
     (functionName: string) => {
       const currentMenu = editorMenu;
       const beat = openRef.current;
-      if (!currentMenu?.target || currentMenu.target.functionName !== functionName || !beat || !editorViewport) return;
+      if (!currentMenu?.target || currentMenu.target.functionName !== functionName || !beat || !appOverlay) return;
+      // The panel is born in the overlay's coordinate space, at the point the
+      // context menu was raised — translated from the click's client position.
+      const overlayBounds = appOverlay.getBoundingClientRect();
       const instance = createFunctionPluginInstance({
         beat,
         target: currentMenu.target,
-        x: currentMenu.menu.x,
-        y: currentMenu.menu.y,
-        viewport: { width: editorViewport.offsetWidth, height: editorViewport.offsetHeight },
+        x: (currentMenu.menu.clientX ?? currentMenu.menu.x) - overlayBounds.left,
+        y: (currentMenu.menu.clientY ?? currentMenu.menu.y) - overlayBounds.top,
+        viewport: { width: appOverlay.offsetWidth, height: appOverlay.offsetHeight },
       });
       const next = functionPluginsRef.current.filter((candidate) => candidate.instanceId !== instance.instanceId);
       next.push(instance);
       functionPluginsRef.current = next;
       setFunctionPlugins(next);
     },
-    [editorMenu, editorViewport],
+    [appOverlay, editorMenu],
   );
 
   const changeFunctionPluginValue = useCallback(
@@ -1423,52 +1437,33 @@ export function App() {
           )}
         </div>
 
-        {/* The dock's height is the grid's --dock-h row; this grip drags it. */}
-        <Grip
-          orientation="horizontal"
-          size={dockH}
-          onChange={onDockHeightChange}
-          side="below"
-          min={DOCK_MIN}
-          max={dockMax}
-          resetTo={DOCK_DEFAULT}
-          label="Resize plugin dock"
-        />
+      <PluginDock
+        dock={dock}
+        onChange={setDock}
+        playing={state.started}
+        floatingRoot={appOverlay}
+        functionPlugins={{
+          instances: functionPlugins,
+          onChange: changeFunctionPlugins,
+          onValue: changeFunctionPluginValue,
+        }}
+      />
 
-        <PluginDock
-          dock={dock}
-          onChange={setDock}
-          playing={state.started}
-          floatingRoot={editorViewport}
-          functionPlugins={{
-            instances: functionPlugins,
-            onChange: changeFunctionPlugins,
-            onValue: changeFunctionPluginValue,
-          }}
-        />
+      <StatusBar
+        root={root}
+        beat={open}
+        dirty={dirty}
+        playing={state.started}
+        cps={cps}
+        harness={harness}
+        error={state.error?.message}
+        recordingMode={recordMode}
+      />
 
-        <StatusBar
-          root={root}
-          beat={open}
-          dirty={dirty}
-          playing={state.started}
-          cps={cps}
-          harness={harness}
-          error={state.error?.message}
-          recordingMode={recordMode}
-        />
-      </div>
-      {settingsOverlay}
-      {closeAsk !== undefined && (
-        <CloseDialog
-          dirty={closeDirtyLabels}
-          failures={closeAsk.failures}
-          busy={closeSaving}
-          onSaveAll={closeSaveAll}
-          onDiscard={closeDiscard}
-          onCancel={closeCancel}
-        />
-      )}
-    </>
+      {/* Floating plugin panels render here via portal: one absolutely
+          positioned layer over the whole app. It never intercepts the pointer
+          itself (pointer-events: none); only the panels inside it do. */}
+      <div className="app-overlay" ref={setAppOverlay} />
+    </div>
   );
 }

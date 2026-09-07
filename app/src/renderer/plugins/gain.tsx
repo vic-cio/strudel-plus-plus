@@ -76,10 +76,10 @@ export function GainControl({ state, onState, playing }: PluginProps) {
   return (
     <div className="gain-plugin">
       <label>
-        <span>gain</span>
+        <span>trim</span>
         <output>{value.toFixed(2)}</output>
         <input
-          aria-label="Gain"
+          aria-label="Trim"
           type="range"
           min={GAIN_CONTROL.min}
           max={GAIN_CONTROL.max}
@@ -89,14 +89,17 @@ export function GainControl({ state, onState, playing }: PluginProps) {
           onChange={(event) => update(Number(event.currentTarget.value))}
         />
       </label>
-      {error !== undefined && <span role="alert">[ gain unavailable: {error} ]</span>}
+      {error !== undefined && <span role="alert">[ trim unavailable: {error} ]</span>}
     </div>
   );
 }
 
+// The id stays 'gain': sessions already remember the device by that id in
+// .session.json (tabs and pluginState), so the rename to TRIM is presentation
+// only — no migration needed, and old state keeps resolving.
 registerPlugin({
   id: 'gain',
-  label: 'GAIN',
+  label: 'TRIM',
   kind: 'functional',
   scope: 'session',
   mount: GainControl,

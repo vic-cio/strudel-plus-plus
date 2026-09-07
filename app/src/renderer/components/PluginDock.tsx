@@ -19,6 +19,12 @@ type FunctionPlugins = {
   onValue: (instanceId: string, value: number) => void;
 };
 
+/** A function control's contextual title: the exact call it edits and the
+ *  line that call lives on, read from the instance's stored source range. */
+function functionTitle(instance: FunctionPluginInstance): string {
+  return `${instance.functionName} @ line ${instance.functionRange.from.line + 1}`;
+}
+
 type Props = {
   /** The session's dock state, restored on open and persisted on change. */
   dock: DockState;
@@ -27,7 +33,9 @@ type Props = {
   playing: boolean;
   /** Current beat/function owner for scoped controls. */
   scope?: ControlContext;
-  /** Editor viewport that owns floating panels; omitted by isolated dock tests. */
+  /** App-level overlay that hosts floating panels and bounds their drags
+   * across the whole app surface; omitted by isolated dock tests, which fall
+   * back to the dock's own bounds. */
   floatingRoot?: HTMLElement | null;
   /** Ephemeral controls bound to exact calls in the active beat. */
   functionPlugins?: FunctionPlugins;
@@ -44,9 +52,19 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
   );
   const [menuPane, setMenuPane] = useState<number>();
   const [activeFunctionId, setActiveFunctionId] = useState<string>();
+  // True while a dragged panel's pointer is inside the dock's rect: the drop
+  // zone the dock highlights, and where a release docks the panel.
+  const [dropHover, setDropHover] = useState(false);
   const rootRef = useRef<HTMLElement>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
-  const openIds = new Set(state.panes.flatMap((pane) => pane.tabs ?? []));
+  // The add menu may only offer devices that are closed everywhere — a pane
+  // tab and a floating panel of the same plugin would show it twice.
+  const openIds = new Set([
+    ...state.panes.flatMap((pane) => pane.tabs ?? []),
+    ...(state.floating ?? []).map((panel) => panel.instanceId),
+  ]);
   const candidates = defs.filter((def) => !openIds.has(def.id));
 
   const writePane = (index: number, next: DockPaneState) => {
@@ -75,25 +93,52 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
   };
 
   const floatPlugin = (id: string) => {
-    onChange(normalizeDockState(dockReducer(state, { type: 'FLOAT_PANEL', instanceId: id }), [...byId.keys()]));
+    const viewport = floatingRoot ?? rootRef.current;
+    const bounds = viewport
+      ? { width: viewport.offsetWidth, height: viewport.offsetHeight }
+      : { width: window.innerWidth, height: window.innerHeight };
+    const currentZ = Math.max(0, ...(state.floating ?? []).map((panel) => panel.geometry.zIndex));
+    const geometry = clampGeometry(defaultGeometry(320, 180, currentZ + 1), bounds);
+    onChange(
+      normalizeDockState(dockReducer(state, { type: 'FLOAT_PANEL', instanceId: id, geometry }), [...byId.keys()]),
+    );
   };
 
-  const closeFloating = (id: string) => {
-    const floating = (state.floating ?? []).filter((f) => f.instanceId !== id);
-    // Reattach to first pane
-    const nextPanes = [...state.panes];
-    const firstPane = nextPanes[0] ?? { tabs: [] };
-    const tabs = [...(firstPane.tabs ?? [])];
-    if (!tabs.includes(id)) {
-      tabs.push(id);
-    }
-    nextPanes[0] = { ...firstPane, tabs, active: id };
-    const nextState: DockState = { ...state, panes: nextPanes };
-    if (floating.length > 0) {
-      nextState.floating = floating;
-    }
-    onChange(normalizeDockState(nextState, [...byId.keys()]));
-  };
+  // A floating panel returning to the dock. The header's close button and a
+  // drop on the dock share this path: reattach to the first pane, unless the
+  // plugin is already open in a pane — a second copy would clone the device,
+  // so that case only activates the existing tab.
+  const dockPanel = useCallback(
+    (id: string) => {
+      const current = stateRef.current;
+      if (!current.floating?.some((panel) => panel.instanceId === id)) return;
+      const floating = current.floating.filter((panel) => panel.instanceId !== id);
+      const nextPanes = current.panes.map((pane) => {
+        const next: DockPaneState & { tabs: string[] } = { tabs: [...(pane.tabs ?? [])] };
+        if (pane.active !== undefined) next.active = pane.active;
+        return next;
+      });
+      const openIndex = nextPanes.findIndex((pane) => pane.tabs.includes(id));
+      if (openIndex === -1) {
+        const firstPane = nextPanes[0] ?? { tabs: [] as string[] };
+        firstPane.tabs.push(id);
+        nextPanes[0] = { tabs: firstPane.tabs, active: id };
+      } else {
+        const openPane = nextPanes[openIndex];
+        if (openPane) nextPanes[openIndex] = { tabs: openPane.tabs, active: id };
+      }
+      const nextState: DockState = { ...current, panes: nextPanes };
+      if (floating.length > 0) {
+        nextState.floating = floating;
+      } else {
+        // The last floating panel is gone: the key must go with it, or the
+        // spread above would resurrect the closed panel next to its new tab.
+        delete nextState.floating;
+      }
+      onChange(normalizeDockState(nextState, [...byId.keys()]));
+    },
+    [byId, onChange],
+  );
 
   const toggleSplit = () => {
     if (!state.split) {
@@ -121,16 +166,27 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
     );
   };
 
-  // Drag state for floating panels
+  // True when the pointer is inside the dock's own rect, measured from live
+  // coordinates rather than hit-testing — the dragged panel sits above the
+  // dock in the overlay, so elementFromPoint would name the panel instead.
+  const isOverDock = useCallback((clientX: number, clientY: number) => {
+    const bounds = rootRef.current?.getBoundingClientRect();
+    if (!bounds) return false;
+    return clientX >= bounds.left && clientX <= bounds.right && clientY >= bounds.top && clientY <= bounds.bottom;
+  }, []);
+
+  // Drag state for floating panels. `moved` gates docking: a pointer that
+  // never travelled is a click (focus), not a drop, so a panel resting over
+  // the dock must not dock itself on a plain click of its header.
+  const DRAG_THRESHOLD = 3;
   const dragRef = useRef<{
     id: string;
     pointerId: number;
     startX: number;
     startY: number;
     startGeo: Geometry;
+    moved: boolean;
   } | null>(null);
-  const stateRef = useRef(state);
-  stateRef.current = state;
 
   const onPointerDown = useCallback(
     (id: string, event: React.PointerEvent) => {
@@ -146,6 +202,7 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
         startX: event.clientX,
         startY: event.clientY,
         startGeo: { ...panel.geometry },
+        moved: false,
       };
     },
     [state.floating],
@@ -157,6 +214,10 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
       if (!drag || drag.id !== id || drag.pointerId !== event.pointerId) return;
       event.preventDefault();
       event.stopPropagation();
+      drag.moved =
+        drag.moved ||
+        Math.abs(event.clientX - drag.startX) > DRAG_THRESHOLD ||
+        Math.abs(event.clientY - drag.startY) > DRAG_THRESHOLD;
       const deltaX = event.clientX - drag.startX;
       const deltaY = event.clientY - drag.startY;
       const updated = applyDelta(drag.startGeo, { x: deltaX, y: deltaY });
@@ -165,6 +226,7 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
         ? { width: viewport.offsetWidth, height: viewport.offsetHeight }
         : { width: window.innerWidth, height: window.innerHeight };
       const clamped = clampGeometry(updated, container);
+      setDropHover(drag.moved && isOverDock(event.clientX, event.clientY));
       const floating = (stateRef.current.floating ?? []).map((f) =>
         f.instanceId === drag.id ? { ...f, geometry: clamped } : f,
       );
@@ -173,13 +235,20 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
       if (target && target.geometry.zIndex < maxZ) target.geometry.zIndex = maxZ + 1;
       onChange(normalizeDockState({ ...stateRef.current, floating }, [...byId.keys()]));
     },
-    [byId, floatingRoot, onChange],
+    [byId, floatingRoot, isOverDock, onChange],
   );
 
-  const stopDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (drag?.pointerId === event.pointerId) {
+  const stopDrag = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>, allowDrop: boolean) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
       dragRef.current = null;
+      setDropHover(false);
+      // Releasing over the dock docks the panel back into the panes; anywhere
+      // else leaves it floating where the pointer let go.
+      if (allowDrop && drag.moved && isOverDock(event.clientX, event.clientY)) {
+        dockPanel(drag.id);
+      }
       if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
         try {
           event.currentTarget.releasePointerCapture(event.pointerId);
@@ -187,8 +256,9 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
           // Capture can already be gone after pointercancel.
         }
       }
-    }
-  }, []);
+    },
+    [dockPanel, isOverDock],
+  );
 
   const functionInstancesRef = useRef(functionInstances);
   functionInstancesRef.current = functionInstances;
@@ -198,6 +268,7 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
     startX: number;
     startY: number;
     startGeo: Geometry;
+    moved: boolean;
   } | null>(null);
 
   const onFunctionPointerDown = useCallback(
@@ -214,6 +285,7 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
         startX: event.clientX,
         startY: event.clientY,
         startGeo: { ...instance.placement.geometry },
+        moved: false,
       };
       const maxZ = Math.max(
         0,
@@ -248,6 +320,10 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
       if (!instance) return;
       event.preventDefault();
       event.stopPropagation();
+      drag.moved =
+        drag.moved ||
+        Math.abs(event.clientX - drag.startX) > DRAG_THRESHOLD ||
+        Math.abs(event.clientY - drag.startY) > DRAG_THRESHOLD;
       const viewport = floatingRoot ?? rootRef.current;
       const bounds = viewport
         ? { width: viewport.offsetWidth, height: viewport.offsetHeight }
@@ -258,11 +334,12 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
         { x: event.clientX - drag.startX, y: event.clientY - drag.startY },
         bounds,
       );
+      setDropHover(drag.moved && isOverDock(event.clientX, event.clientY));
       functionPlugins.onChange(
         functionInstancesRef.current.map((candidate) => (candidate.instanceId === id ? moved : candidate)),
       );
     },
-    [floatingRoot, functionPlugins],
+    [floatingRoot, functionPlugins, isOverDock],
   );
 
   const stopFunctionDrag = useCallback(
@@ -270,22 +347,14 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
       const drag = functionDragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
       functionDragRef.current = null;
-      if (allowDrop && functionPlugins) {
-        const bounds = rootRef.current?.getBoundingClientRect();
-        if (
-          bounds &&
-          event.clientX >= bounds.left &&
-          event.clientX <= bounds.right &&
-          event.clientY >= bounds.top &&
-          event.clientY <= bounds.bottom
-        ) {
-          functionPlugins.onChange(
-            functionInstancesRef.current.map((candidate) =>
-              candidate.instanceId === drag.id ? { ...candidate, placement: { kind: 'docked' } } : candidate,
-            ),
-          );
-          setActiveFunctionId(drag.id);
-        }
+      setDropHover(false);
+      if (allowDrop && drag.moved && functionPlugins && isOverDock(event.clientX, event.clientY)) {
+        functionPlugins.onChange(
+          functionInstancesRef.current.map((candidate) =>
+            candidate.instanceId === drag.id ? { ...candidate, placement: { kind: 'docked' } } : candidate,
+          ),
+        );
+        setActiveFunctionId(drag.id);
       }
       if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
         try {
@@ -295,7 +364,7 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
         }
       }
     },
-    [functionPlugins],
+    [functionPlugins, isOverDock],
   );
 
   const closeFunctionPlugin = useCallback(
@@ -414,8 +483,8 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
           className="floating-header"
           onPointerDown={(event) => onPointerDown(panel.instanceId, event)}
           onPointerMove={(event) => onPointerMove(panel.instanceId, event)}
-          onPointerUp={stopDrag}
-          onPointerCancel={stopDrag}
+          onPointerUp={(event) => stopDrag(event, true)}
+          onPointerCancel={(event) => stopDrag(event, false)}
           style={{ cursor: 'move', userSelect: 'none', touchAction: 'none' }}
         >
           <span>[ {def.label} ]</span>
@@ -424,7 +493,7 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
             title={`Reattach ${def.label}`}
             onClick={(event) => {
               event.stopPropagation();
-              closeFloating(panel.instanceId);
+              dockPanel(panel.instanceId);
             }}
           >
             ×
@@ -469,12 +538,15 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
           style={{ cursor: 'move', userSelect: 'none', touchAction: 'none' }}
         >
           <span>
-            [ {def.label} · {instance.functionName} ]
+            [ {def.label} · {functionTitle(instance)} ]
           </span>
           <button
             className="floating-close"
-            title={`Close ${instance.functionName} control`}
-            onClick={() => closeFunctionPlugin(instance.instanceId)}
+            title={`Close ${functionTitle(instance)} control`}
+            onClick={(event) => {
+              event.stopPropagation();
+              closeFunctionPlugin(instance.instanceId);
+            }}
           >
             ×
           </button>
@@ -495,7 +567,12 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
   });
 
   return (
-    <section className="dock" aria-label="plugin dock" ref={rootRef} style={{ position: 'relative' }}>
+    <section
+      className={dropHover ? 'dock dock-drop-target' : 'dock'}
+      aria-label="plugin dock"
+      ref={rootRef}
+      style={{ position: 'relative' }}
+    >
       <div className={state.split ? 'dock-panes split' : 'dock-panes'}>
         {state.panes.map((pane, index) => {
           const activeDef = pane.active ? byId.get(pane.active) : undefined;
@@ -541,18 +618,18 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
                           aria-current={activeFunctionId === instance.instanceId}
                           onClick={() => setActiveFunctionId(instance.instanceId)}
                         >
-                          [ {def.label} · {instance.functionName} ]
+                          [ {def.label} · {functionTitle(instance)} ]
                         </button>
                         <button
                           className="dock-tab-float"
-                          title={`Float ${instance.functionName} control`}
+                          title={`Float ${functionTitle(instance)} control`}
                           onClick={() => floatFunctionPlugin(instance.instanceId)}
                         >
                           ⧉
                         </button>
                         <button
                           className="dock-tab-close"
-                          title={`Close ${instance.functionName} control`}
+                          title={`Close ${functionTitle(instance)} control`}
                           onClick={() => closeFunctionPlugin(instance.instanceId)}
                         >
                           ×
@@ -624,7 +701,6 @@ export function PluginDock({ dock, onChange, playing, scope = {}, floatingRoot, 
           );
         })}
       </div>
-
       {floatingRoot
         ? createPortal(
             <>
