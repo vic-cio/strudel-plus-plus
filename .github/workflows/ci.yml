@@ -19,6 +19,13 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
+      - name: Restore pinned Strudel artifact cache
+        uses: actions/cache@v4
+        with:
+          path: app/.external/strudel
+          key: strudel-artifacts-${{ runner.os }}-${{ hashFiles('scripts/fetch-upstream-artifacts.mjs') }}
+          restore-keys: |
+            strudel-artifacts-${{ runner.os }}-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Verify wrapper boundary
