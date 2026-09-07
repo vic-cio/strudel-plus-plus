@@ -61,6 +61,7 @@ const { desktop, setStateMock, changeHandler, repl, codeChange, sessionState } =
     // Absent editor by default: the app falls back to whole-document
     // setCode. Tests for the flicker-free path opt into true per test.
     replaceCodeRange: vi.fn((): boolean => false),
+    getTransportNow: vi.fn(),
   };
   const codeChange: { current: ((code: string) => void) | undefined } = { current: undefined };
   type MockSessionState = {
